@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SemiconductorLibrary xmlns="http://www.plexim.com/xml/semiconductors/" version="1.1">
+    <Package class="MOSFET" vendor="Mitsubishi" partnumber="PMF75-120-S002_Mosfet">
+        <Variables>
+            <Variable>
+                <Name>Csecu</Name>
+                <Description>Losses Security Factor</Description>
+            </Variable>
+        </Variables>
+        <SemiconductorData type="MOSFET">
+            <TurnOnLoss>
+                <ComputationMethod>Table and formula</ComputationMethod>
+                <Formula>E*Csecu</Formula>
+                <CurrentAxis> -1 0 0.01 10 20 30 40 50 60 70 80</CurrentAxis>
+                <VoltageAxis> -10 0 600</VoltageAxis>
+                <TemperatureAxis> 125</TemperatureAxis>
+                <Energy scale="0.001">
+                    <Temperature>
+                        <Voltage> 0 0 0 0 0 0 0 0 0 0 0</Voltage>
+                        <Voltage> 0 0 0 0 0 0 0 0 0 0 0</Voltage>
+                        <Voltage> 0 0 0.38 0.63 0.89 1.14 1.39 1.66 1.89 2.14 2.4</Voltage>
+                    </Temperature>
+                </Energy>
+            </TurnOnLoss>
+            <TurnOffLoss>
+                <ComputationMethod>Table and formula</ComputationMethod>
+                <Formula>E*Csecu</Formula>
+                <CurrentAxis> -1 0 0.01 10 20 30 40 50 60 70 80</CurrentAxis>
+                <VoltageAxis> 0 600</VoltageAxis>
+                <TemperatureAxis> 125</TemperatureAxis>
+                <Energy scale="0.001">
+                    <Temperature>
+                        <Voltage> 0 0 0 0 0 0 0 0 0 0 0</Voltage>
+                        <Voltage> 0 0 0.12 0.28 0.41 0.55 0.69 0.86 1.08 1.41 1.73</Voltage>
+                    </Temperature>
+                </Energy>
+            </TurnOffLoss>
+            <ConductionLoss>
+                <ComputationMethod>Table and formula</ComputationMethod>
+                <Formula>v*Csecu</Formula>
+                <CurrentAxis> 0 20 40 60 80</CurrentAxis>
+                <TemperatureAxis> 125</TemperatureAxis>
+                <VoltageDrop scale="1">
+                    <Temperature> 0 0.62 1.31 2.08 2.9</Temperature>
+                </VoltageDrop>
+            </ConductionLoss>
+        </SemiconductorData>
+        <ThermalModel>
+            <Branch type="Foster">
+                <RTauElement R="0.41" Tau="0.1"/>
+            </Branch>
+        </ThermalModel>
+        <Comment>
+            <Line></Line>
+        </Comment>
+    </Package>
+</SemiconductorLibrary>
