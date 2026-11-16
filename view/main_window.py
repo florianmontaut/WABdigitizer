@@ -75,6 +75,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actionExportCsv = a("Courbes du graphique (CSV)...", "export")
         self.actionExportGrid = a("Courbes sur la grille de X commune (CSV)...", "table")
         self.actionExportComponent = a("Fiche du composant (JSON)...", "export")
+        self.actionExportPlecs = a("Composant pour PLECS (XML)...", "export",
+                                   "Description thermique PLECS : pertes et modèle thermique")
         self.actionCopyTable = a("Copier la table de la courbe", "table",
                                  "Copier X, Y (collage Excel)", "Ctrl+Shift+C")
         self.actionCopyLut = a("Copier la courbe en table formules", "link",
@@ -134,7 +136,8 @@ class MainWindow(QtWidgets.QMainWindow):
         menu.addAction(self.actionPaste)
         menu.addSeparator()
         exports = menu.addMenu("Exporter")
-        for act in (self.actionExportCsv, self.actionExportGrid, self.actionExportComponent):
+        for act in (self.actionExportCsv, self.actionExportGrid, self.actionExportComponent,
+                    self.actionExportPlecs):
             exports.addAction(act)
         menu.addSeparator()
         menu.addAction(self.actionQuit)
@@ -212,6 +215,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def error(self, title: str, text: str):
         if QtWidgets.QApplication.platformName() == "offscreen":
             self.message(f"{title} : {text}")
+            self.last_error = text          # lu par les tests
             return
         QtWidgets.QMessageBox.warning(self, title, text)
 

@@ -14,8 +14,9 @@ from formules import FormulaError, units
 from qtsocle import options_panel, settings, theme
 from ressources import app_settings
 
-from model import document, export, extraction, fit, mask
+from model import document, export, extraction, fit, mask, plecs
 from model.calibration import AxisCalibration, CalibrationError
+from model.plecs import PlecsError
 from view.canvas import Mode
 from view.dialogs import CalibrationDialog, format_value, parse_value
 from view.main_window import IMAGE_SUFFIXES, qimage_to_array
@@ -61,6 +62,7 @@ class MainController(QtCore.QObject):
         view.actionExportCsv.triggered.connect(self.export_csv)
         view.actionExportGrid.triggered.connect(self.export_grid)
         view.actionExportComponent.triggered.connect(self.export_component)
+        view.actionExportPlecs.triggered.connect(self.export_plecs)
         view.actionCopyTable.triggered.connect(self.copy_table)
         view.actionCopyLut.triggered.connect(self.copy_lut)
         view.actionQuit.triggered.connect(view.close)
@@ -311,6 +313,29 @@ class MainController(QtCore.QObject):
             lines.append(sep.join("" if not np.isfinite(v) else
                                   format(v, ".8g").replace(".", dec) for v in row))
         export.write_text(path, "\n".join(lines) + "\n")
+
+    def export_plecs(self, path=None) -> bool:
+        """Description thermique PLECS ; erreurs et avertissements affichés."""
+        try:
+            text, warnings = plecs.build(self.component)
+        except PlecsError as error:
+            self.view.error("Export PLECS", str(error))
+            return False
+        if path is None:
+            library = pathlib.Path(self.options["library_dir"])
+            library.mkdir(parents=True, exist_ok=True)
+            name = self.component.part_number or self.component.name or "composant"
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self.view, "Composant pour PLECS", str(library / f"{name}.xml"), "XML (*.xml)")
+            if not path:
+                return False
+        export.write_text(path, text)
+        if warnings:
+            self.view.error("Export PLECS", f"Fichier écrit : {path}\n\nÀ vérifier :\n- "
+                            + "\n- ".join(warnings))
+        else:
+            self.view.message(f"Fichier PLECS écrit : {path}", 6000)
+        return True
 
     def export_component(self):
         library = pathlib.Path(self.options["library_dir"])
@@ -690,6 +715,16 @@ class MainController(QtCore.QObject):
         c = self.component
         c.name, c.manufacturer = param["Nom"], param["Fabricant"]
         c.part_number, c.category, c.notes = param["Référence"], param["Catégorie"], param["Notes"]
+        for child, change, _ in changes:
+            if change == "activated" and child.name() == "Exporter pour PLECS":
+                self.export_plecs()
+                return
+        group, settings_ = param.child("Export PLECS"), c.plecs
+        settings_.current_axis = group["Axe de courant (A)"]
+        settings_.current_points = group["Intervalles (axe auto)"]
+        settings_.origin, settings_.zero_voltage = group["Point (0, 0)"], group["Ligne 0 V"]
+        settings_.safety_factor = group["Facteur de sécurité Csecu"]
+        settings_.foster = group["Modèle thermique Foster"]
         self.set_dirty()
 
     def _graph_changed(self, param, changes):
@@ -701,6 +736,7 @@ class MainController(QtCore.QObject):
                 self.edit_axis_values()
                 return
         graph.name = param["Nom"]
+        graph.plecs_role = param["Rôle PLECS"]
         graph.x_axis.quantity, graph.x_axis.unit = param["Grandeur X"], param["Unité X"]
         graph.y_axis.quantity, graph.y_axis.unit = param["Grandeur Y"], param["Unité Y"]
         for child, change, _ in changes:
@@ -730,6 +766,12 @@ class MainController(QtCore.QObject):
                 return
         dataset.name = param["Nom"]
         dataset.condition = param["Condition"]
+        for field, label in (("temperature", "Tj (°C)"), ("voltage", "Tension (V)")):
+            text = param[label].strip()
+            try:
+                setattr(dataset, field, parse_value(text) if text else None)
+            except ValueError as error:
+                self.view.message(f"{label} : {error}", 5000)
         dataset.color = pg.mkColor(param["Couleur"]).name()
         self.set_dirty()
         self.rebuild_tree()
@@ -933,6 +975,10 @@ class MainController(QtCore.QObject):
         c, p = self.component, self.view.params["component"]
         p["Nom"], p["Fabricant"], p["Référence"] = c.name, c.manufacturer, c.part_number
         p["Catégorie"], p["Notes"] = c.category, c.notes
+        group, s = p.child("Export PLECS"), c.plecs
+        group["Axe de courant (A)"], group["Intervalles (axe auto)"] = s.current_axis, s.current_points
+        group["Point (0, 0)"], group["Ligne 0 V"] = s.origin, s.zero_voltage
+        group["Facteur de sécurité Csecu"], group["Modèle thermique Foster"] = s.safety_factor, s.foster
         graph, p = self.graph, self.view.params["graph"]
         p.setOpts(visible=graph is not None)
         if graph is not None:
@@ -974,6 +1020,8 @@ class MainController(QtCore.QObject):
         p.setOpts(visible=dataset is not None)
         if dataset is not None:
             p["Nom"], p["Condition"] = dataset.name, dataset.condition
+            p["Tj (°C)"] = "" if dataset.temperature is None else format_value(dataset.temperature)
+            p["Tension (V)"] = "" if dataset.voltage is None else format_value(dataset.voltage)
             p["Couleur"] = QtGui.QColor(dataset.color)
             p["Points"] = len(dataset)
         self._loading = False

@@ -28,6 +28,7 @@ import numpy as np
 from .calibration import AxisCalibration
 from .extraction import ExtractionSettings
 from .fit import FitResult
+from .plecs import PlecsSettings
 
 PROJECT_FORMAT = "ParamDigitizer project v1"
 PROJECT_SUFFIX = ".pdig.json"
@@ -75,6 +76,9 @@ class Dataset:
     mask: np.ndarray | None = None      # (lignes, colonnes) bool
     curve_color: tuple = (0, 0, 0)
     tolerance: float = 120.0            # distance RGB admise
+    # export PLECS : conditions numériques (sinon lues dans condition)
+    temperature: float | None = None    # °C
+    voltage: float | None = None        # V, tension de commutation
 
     def __post_init__(self):
         self.pixels = np.asarray(self.pixels, dtype=float).reshape(-1, 2)
@@ -140,6 +144,8 @@ class Dataset:
             out["fit"] = self.fit.to_dict()
         out["curve_color"] = list(self.curve_color)
         out["tolerance"] = self.tolerance
+        out["temperature"] = self.temperature
+        out["voltage"] = self.voltage
         out["mask"] = encode_array(self.mask) if self.mask is not None and self.mask.any() else None
         return out
 
@@ -152,7 +158,8 @@ class Dataset:
                    fit=FitResult.from_dict(data["fit"]) if data.get("fit") else None,
                    mask=decode_array(data.get("mask")),
                    curve_color=tuple(data.get("curve_color", (0, 0, 0))),
-                   tolerance=float(data.get("tolerance", 120.0)))
+                   tolerance=float(data.get("tolerance", 120.0)),
+                   temperature=data.get("temperature"), voltage=data.get("voltage"))
 
 
 # ================================================================ graphique
@@ -175,6 +182,7 @@ class Graph:
     y_axis: Axis = field(default_factory=Axis)
     datasets: list = field(default_factory=list)
     extraction: ExtractionSettings = field(default_factory=ExtractionSettings)  # grille commune
+    plecs_role: str = ""                         # voir model.plecs.ROLES
     source: str = ""                             # fichier d'origine (information)
 
     @property
@@ -209,7 +217,7 @@ class Graph:
         return {"name": self.name, "source": self.source,
                 "x_axis": vars(self.x_axis), "y_axis": vars(self.y_axis),
                 "calibration": self.calibration.to_dict() if self.calibration else None,
-                "extraction": self.extraction.to_dict(),
+                "extraction": self.extraction.to_dict(), "plecs_role": self.plecs_role,
                 "datasets": [d.to_dict(self.calibration) for d in self.datasets],
                 "image": encode_array(self.image)}
 
@@ -221,7 +229,8 @@ class Graph:
                                 if data.get("calibration") else None),
                    x_axis=Axis(**data.get("x_axis", {})), y_axis=Axis(**data.get("y_axis", {})),
                    datasets=[Dataset.from_dict(d) for d in data.get("datasets", [])],
-                   extraction=ExtractionSettings.from_dict(data.get("extraction")))
+                   extraction=ExtractionSettings.from_dict(data.get("extraction")),
+                   plecs_role=data.get("plecs_role", ""))
 
 
 # ================================================================ composant
@@ -233,6 +242,7 @@ class Component:
     category: str = ""          # IGBT, MOSFET, diode, condensateur, inductance...
     notes: str = ""
     graphs: list = field(default_factory=list)
+    plecs: PlecsSettings = field(default_factory=PlecsSettings)
 
     def add_graph(self, image: np.ndarray, name: str | None = None, source: str = "") -> Graph:
         graph = Graph(name=name or f"Graphique {len(self.graphs) + 1}", image=image,
@@ -245,6 +255,7 @@ class Component:
         return {"format": PROJECT_FORMAT, "name": self.name,
                 "manufacturer": self.manufacturer, "part_number": self.part_number,
                 "category": self.category, "notes": self.notes,
+                "plecs": self.plecs.to_dict(),
                 "graphs": [g.to_dict() for g in self.graphs]}
 
     @classmethod
@@ -254,7 +265,8 @@ class Component:
         return cls(name=data.get("name", ""), manufacturer=data.get("manufacturer", ""),
                    part_number=data.get("part_number", ""), category=data.get("category", ""),
                    notes=data.get("notes", ""),
-                   graphs=[Graph.from_dict(g) for g in data.get("graphs", [])])
+                   graphs=[Graph.from_dict(g) for g in data.get("graphs", [])],
+                   plecs=PlecsSettings.from_dict(data.get("plecs")))
 
 
 def save(component: Component, path) -> None:

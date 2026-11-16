@@ -48,6 +48,18 @@ Méthodes d'extraction :
 | Grille de X commune (CSV) | tables 2D (PLECS...) |
 | Fiche du composant (JSON, `ParamDigitizer component v1`) | logiciel de dimensionnement : valeurs physiques, unités, conditions, modèles, sans images |
 | Copier la courbe en table formules | `interp(x; x1; y1; ...)` collé dans une formule |
+| Composant pour PLECS (XML) | description thermique PLECS (`SemiconductorLibrary` 1.1) : pertes en conduction, à la fermeture, à l'ouverture, modèle de Foster |
+
+### Export PLECS
+
+- Catégorie du composant : IGBT, MOSFET, Diode ou Thyristor.
+- Chaque graphique reçoit un **rôle PLECS** : conduction v(i), Eon(i) ou Eoff(i) / Err(i).
+  Unités contrôlées (courant en A ou multiple, énergie en J ou multiple, tension en V).
+- Chaque courbe a sa **température** et, pour les énergies, sa **tension de commutation** :
+  champs Tj (°C) et Tension (V), sinon lus dans la condition (« Tj = 125 °C, VCE = 600 V »).
+- Toutes les courbes sont rééchantillonnées sur un axe de courant commun (saisi, ou
+  automatique) ; options : point (0, 0), ligne 0 V d'énergie nulle, facteur de sécurité
+  `Csecu`, modèle thermique de Foster (lignes « R tau »).
 
 ## Construire l'exécutable
 

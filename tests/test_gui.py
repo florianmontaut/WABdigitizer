@@ -217,3 +217,38 @@ def test_masque_et_couleur_propres_a_chaque_courbe(ctrl):
     ctrl.refresh_all()
     assert ctrl.view.canvas.mask_item.image is not None
     assert ctrl.view.params["extraction"]["Couleur de la courbe"].red() == 220
+
+
+def test_export_plecs_depuis_l_interface(ctrl, tmp_path):
+    from model import plecs
+    graph = calibrated(ctrl)
+    ctrl.view.params["graph"]["Rôle PLECS"] = "turn_on"
+    ctrl.view.params["graph"]["Unité X"] = "A"
+    ctrl.view.params["graph"]["Unité Y"] = "mJ"
+    assert graph.plecs_role == "turn_on"
+    for x, y in [(100, 400), (300, 250), (500, 100)]:       # 0..10 A -> 0..30 mJ
+        ctrl.canvas_pressed(x, y)
+        ctrl.canvas_released(x, y)
+
+    path = tmp_path / "x.xml"
+    assert not ctrl.export_plecs(path)                       # pas de catégorie
+    assert "catégorie" in ctrl.view.last_error
+
+    ctrl.view.params["component"]["Catégorie"] = "IGBT"
+    ctrl.view.params["dataset"]["Condition"] = "Tj = 150 °C"
+    assert not ctrl.export_plecs(path)
+    assert "tension de commutation" in ctrl.view.last_error
+    ctrl.view.params["dataset"]["Tension (V)"] = "600"
+    assert ctrl.dataset.voltage == 600.0
+
+    group = ctrl.view.params["component"].child("Export PLECS")
+    group["Intervalles (axe auto)"] = 5
+    group["Modèle thermique Foster"] = "0.1\t0.01\n0.2\t0.1"
+    assert ctrl.component.plecs.current_points == 5
+    assert ctrl.export_plecs(path)
+    tables = plecs.read_tables(path.read_text(encoding="utf-8"))
+    on = tables["TurnOnLoss"]
+    assert on["temperature"] == [150] and on["voltage"] == [0, 600]
+    assert on["current"] == [0, 2, 4, 6, 8, 10]
+    assert np.allclose(on["values"][0][1], [0, 6, 12, 18, 24, 30], atol=0.05)
+    assert tables["foster"] == [(0.1, 0.01), (0.2, 0.1)]

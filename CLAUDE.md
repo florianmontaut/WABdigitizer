@@ -41,12 +41,17 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     `Dataset` (points **en pixels**, condition, masque et couleur propres, modèle).
     Fichier `*.pdig.json` (« ParamDigitizer project v1 »), image et masques compressés dedans.
   - `export.py` : CSV, grille commune, `interp(...)`, fiche « ParamDigitizer component v1 ».
+  - `plecs.py` : description thermique PLECS (XML « SemiconductorLibrary » 1.1). Rôle
+    par graphique (`Graph.plecs_role`), Tj / tension par courbe, réglages dans
+    `Component.plecs`. Référence : `tests/plecs_reference_PMF75-120.xml`, fichier fait à
+    la main par l'utilisateur, que `test_plecs.py` reproduit. Les XSD de l'ancien dépôt
+    (générés depuis ce seul exemple) ne sont pas fiables : non utilisés.
 - `view/` : `canvas.py` (image en row-major dans une ViewBox à Y inversé : pixels de
   l'image = coordonnées de la vue ; émet pressed / moved / released en pixels),
   `main_window.py`, `properties.py` (groupes du ParameterTree), `dialogs.py`.
 - `controller/main_controller.py` : modes du canevas, calibration, édition, extraction,
   modèle, fichiers, exports.
-- `tests/` : `test_model.py` (calculs), `test_gui.py` (contrôleur sans écran).
+- `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_gui.py` (contrôleur sans écran).
 
 ## Choix de conception à respecter
 
@@ -61,6 +66,9 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   pas sans écran (`finish_calibration`), les tests appellent `apply_calibration`.
 
 ## Non fait / pistes
+
+- Export PLECS : jamais importé dans PLECS lui-même ; classes « IGBT with Diode » /
+  « MOSFET with Diode », modèle de Cauer, ajustement de Foster sur une courbe Zth(t).
 
 - Annuler / refaire.
 - Détection automatique des axes et de la grille (piste dans le brouillon `test_qpaint.py`).
