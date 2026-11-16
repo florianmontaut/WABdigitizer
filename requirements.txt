@@ -1,0 +1,20 @@
+# Socle commun (thème, options, démarrage, chemins, construction de l'exécutable) et
+# moteur de formules (modèles ajustés, tables interp), figés à une version de leur dépôt.
+# Pour travailler aussi sur l'un d'eux, installer ensuite sa copie locale :
+#     pip install -e ..\qtsocle
+#     pip install -e ..\formules
+# (à relancer après chaque pip install -r requirements.txt)
+qtsocle @ git+https://github.com/florianmontaut/qtsocle@v0.1.0
+formules @ git+https://github.com/florianmontaut/formules@v0.1.0
+
+# Versions de l'environnement de développement (Python 3.11)
+PyQt6==6.4.2
+pyqtgraph==0.13.3
+pyqtdarktheme==2.1.0
+numpy>=1.26
+scipy>=1.11
+# facultatif : méthode d'extraction « Squelette »
+scikit-image>=0.21
+# tests et exécutable
+pytest>=8
+pyinstaller>=6
