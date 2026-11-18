@@ -59,6 +59,13 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   `main_window.py`, `properties.py` (groupes du ParameterTree), `dialogs.py`.
 - `controller/main_controller.py` : modes du canevas, calibration, édition, extraction,
   modèle, fichiers, exports.
+- `controller/commands.py` : annuler / refaire (`QUndoStack` du contrôleur, mécanisme de
+  GLviewer, sans son code). Commandes par instantanés avant / après, objets désignés par
+  référence : `PointsCommand` (points + modèle ; flèches fusionnées par `mergeWith`),
+  `CalibrationCommand`, `MaskCommand` (zone modifiée seulement), `InsertCommand`
+  (courbes, graphiques). Une action déjà faite à l'écran (glisser, pinceau) est poussée
+  au relâchement. Les propriétés (noms, unités, réglages) restent hors de la pile :
+  `set_dirty()` ; l'étoile du titre = hors pile ou pile non propre.
 - `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_compare.py`, `test_gui.py`
   (contrôleurs sans écran).
 
@@ -71,6 +78,8 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
 - Données de l'utilisateur dans le dossier donné par `qtsocle.paths.user_data_dir`.
 - Fermeture : destruction ordonnée par `qtsocle.app.run`, modèles Qt parentés à leurs
   vues, slots en méthodes liées ; `view.close_guard` est une `weakref.WeakMethod`.
+- Toute modification des points, de la calibration, du masque ou de la structure passe
+  par une commande de la pile (`MainController.push`, `change_points`).
 - Tests d'interface : `dispose(ctrl)` en fin de test ; les boîtes de dialogue ne s'ouvrent
   pas sans écran (`finish_calibration`), les tests appellent `apply_calibration`.
 
@@ -81,7 +90,6 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
 - Export PLECS : jamais importé dans PLECS lui-même ; classes « IGBT with Diode » /
   « MOSFET with Diode », modèle de Cauer, ajustement de Foster sur une courbe Zth(t).
 
-- Annuler / refaire.
 - Détection automatique des axes et de la grille (piste dans le brouillon `test_qpaint.py`).
 - Loupe de pointage (WPD), courbes non fonctionnelles (hystérésis) : l'extraction trie par X.
 - Intégration au logiciel de dimensionnement : par la fiche JSON (aucun import de code).

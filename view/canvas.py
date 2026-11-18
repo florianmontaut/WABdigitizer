@@ -52,6 +52,8 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
     pressed = QtCore.pyqtSignal(float, float)
     moved = QtCore.pyqtSignal(float, float, bool)       # x, y, bouton gauche enfoncé
     released = QtCore.pyqtSignal(float, float)
+    nudged = QtCore.pyqtSignal(float, float)            # flèches : déplacement en pixels
+    key_command = QtCore.pyqtSignal(str)                # "delete", "next", "previous"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -94,6 +96,14 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
         self.brush_cursor.setVisible(False)
         self.view_box.addItem(self.brush_cursor, ignoreBounds=True)
 
+        # point sélectionné (courbe ou repère de calibration) : anneau
+        self.selection_item = pg.ScatterPlotItem(size=17, symbol="o", brush=None,
+                                                 pen=pg.mkPen("#FF8800", width=2), pxMode=True)
+        self.selection_item.setZValue(40)
+        self.view_box.addItem(self.selection_item, ignoreBounds=True)
+
+        # les flèches et Tab arrivent ici une fois le canevas cliqué
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self.scene().installEventFilter(self)
         self.set_mode(Mode.NAVIGATE)
 
@@ -193,6 +203,69 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
                 self.view_box.addItem(item, ignoreBounds=True)
             self.dataset_items.append((points, model))
 
+    def set_selection(self, point):
+        """Anneau autour du point (x, y) sélectionné, None pour l'effacer."""
+        if point is None:
+            self.selection_item.clear()
+        else:
+            self.selection_item.setData(pos=[tuple(point)])
+
+    # ============================================================ clavier
+    # pas des flèches, en pixels de l'image : normal, Maj, Ctrl
+    # pas des flèches en pixels de l'ÉCRAN : normal, Maj, Ctrl. Convertis en pixels de
+    # l'image selon le zoom : plus on zoome, plus le déplacement est fin
+    STEPS = (1.0, 10.0, 0.1)
+    ARROWS = {QtCore.Qt.Key.Key_Left: (-1, 0), QtCore.Qt.Key.Key_Right: (1, 0),
+              QtCore.Qt.Key.Key_Up: (0, -1), QtCore.Qt.Key.Key_Down: (0, 1)}
+
+    def step(self, modifiers) -> float:
+        """Pas en pixels de l'image : pas à l'écran × taille d'un pixel de l'écran."""
+        if modifiers & QtCore.Qt.KeyboardModifier.ControlModifier:
+            screen = self.STEPS[2]
+        elif modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier:
+            screen = self.STEPS[1]
+        else:
+            screen = self.STEPS[0]
+        return screen * self.pixel_size()
+
+    def handle_key(self, key, modifiers) -> bool:
+        """Touche traitée (True) ou laissée à Qt. Seulement en calibration et en ajout."""
+        if self.mode not in (Mode.CALIBRATE, Mode.ADD) or self._shape is None:
+            return False
+        if key in self.ARROWS:
+            dx, dy = self.ARROWS[key]
+            step = self.step(modifiers)
+            self.nudged.emit(dx * step, dy * step)
+            return True
+        if self.mode == Mode.ADD:
+            if key in (QtCore.Qt.Key.Key_Delete, QtCore.Qt.Key.Key_Backspace):
+                self.key_command.emit("delete")
+                return True
+            if key == QtCore.Qt.Key.Key_Backtab or (
+                    key == QtCore.Qt.Key.Key_Tab
+                    and modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier):
+                self.key_command.emit("previous")
+                return True
+            if key == QtCore.Qt.Key.Key_Tab:
+                self.key_command.emit("next")
+                return True
+        return False
+
+    def event(self, event):
+        # Tab passe d'habitude au widget suivant avant keyPressEvent
+        if (event.type() == QtCore.QEvent.Type.KeyPress
+                and event.key() in (QtCore.Qt.Key.Key_Tab, QtCore.Qt.Key.Key_Backtab)
+                and self.handle_key(event.key(), event.modifiers())):
+            event.accept()
+            return True
+        return super().event(event)
+
+    def keyPressEvent(self, event):
+        if self.handle_key(event.key(), event.modifiers()):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     # ============================================================ modes et souris
     def set_mode(self, mode: Mode):
         self.mode = mode
@@ -232,6 +305,7 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
             if event.button() != left or not self._inside(event.scenePos()):
                 return False
             self._left_down = True
+            self.setFocus(QtCore.Qt.FocusReason.MouseFocusReason)
             self.pressed.emit(*self._image_pos(event.scenePos()))
             event.accept()
             return True

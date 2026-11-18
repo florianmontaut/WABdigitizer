@@ -3,6 +3,7 @@
 Contrôleur principal : relie la fenêtre (canevas, arborescence, paramètres, table) au
 document numérisé (model.document) et aux calculs (calibration, extraction, ajustement).
 """
+import dataclasses
 import pathlib
 import weakref
 
@@ -17,6 +18,8 @@ from ressources import app_settings
 from model import document, export, extraction, fit, mask, plecs
 from model.calibration import AxisCalibration, CalibrationError
 from model.plecs import PlecsError
+from controller.commands import (CalibrationCommand, InsertCommand, MaskCommand,
+                                 PointsCommand, points_state, same_points)
 from controller.compare_controller import CompareController
 from view.canvas import Mode
 from view.compare_window import CompareWindow
@@ -26,6 +29,7 @@ from view.main_window import IMAGE_SUFFIXES, qimage_to_array
 ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
 CLICK_TOLERANCE = 7          # pixels de l'écran
 MODEL_SAMPLES = 300
+UNDO_LIMIT = 200
 
 
 class MainController(QtCore.QObject):
@@ -47,9 +51,25 @@ class MainController(QtCore.QObject):
         self.dataset_index = None
         self.calibration_clicks = []     # points pointés pendant la calibration
         self.drag_index = None
+        self.drag_before = None          # état des points au début d'un glisser
+        self.drag_text = ""
+        self.drag_selected = None
+        self.selected_point = None       # indice du point sélectionné de la courbe
+        self.calibration_marker = None   # repère de calibration sélectionné (0..3)
+        self.calibration_drag = None     # repères pendant le glisser d'un repère
         self.last_paint = None
+        self.mask_before = None          # masque au début d'un coup de pinceau
         self._loading = False            # remplissage des paramètres en cours
+        self._outside_dirty = False      # modifications hors de la pile (propriétés)
         self.compare = None              # contrôleur de la fenêtre de comparaison
+
+        # annuler / refaire : pile parentée à la vue, actions dans la barre et le menu
+        self.undo_stack = QtGui.QUndoStack(view)
+        self.undo_stack.setUndoLimit(UNDO_LIMIT)
+        self.undo_stack.cleanChanged.connect(self._update_title)
+        self.undo_stack.indexChanged.connect(self._update_title)
+        view.add_history_actions(self.undo_stack.createUndoAction(view, "Annuler"),
+                                 self.undo_stack.createRedoAction(view, "Refaire"))
 
         # modèles Qt parentés à leur vue : détruits avec elle, dans l'ordre
         self.tree_model = QtGui.QStandardItemModel(view.tree)
@@ -80,6 +100,7 @@ class MainController(QtCore.QObject):
         view.actionOptions.triggered.connect(self.edit_options)
         view.actionDark.toggled.connect(self.set_dark_mode)
         view.closing.connect(self.save_settings)
+        view.closing.connect(self.release_history)
         # projet modifié : proposé à l'enregistrement avant fermeture (référence faible :
         # la fenêtre ne garde pas le contrôleur en vie)
         view.close_guard = weakref.WeakMethod(self._ask_discard)
@@ -87,6 +108,9 @@ class MainController(QtCore.QObject):
         view.canvas.pressed.connect(self.canvas_pressed)
         view.canvas.moved.connect(self.canvas_moved)
         view.canvas.released.connect(self.canvas_released)
+        view.canvas.nudged.connect(self.nudge)
+        view.canvas.key_command.connect(self.key_command)
+        view.table.currentCellChanged.connect(self.table_current_changed)
         view.tree.selectionModel().currentChanged.connect(self.tree_current_changed)
         self.tree_model.itemChanged.connect(self.tree_item_changed)
         view.table.cellChanged.connect(self.table_cell_changed)
@@ -113,10 +137,28 @@ class MainController(QtCore.QObject):
         return graph.datasets[self.dataset_index]
 
     def set_dirty(self, dirty=True):
-        self.dirty = dirty
+        """Modification hors de la pile (propriétés) ; False : projet enregistré."""
+        self._outside_dirty = dirty
+        self._update_title()
+
+    def _update_title(self, *_):
+        self.dirty = self._outside_dirty or not self.undo_stack.isClean()
         name = self.path.name if self.path else "sans titre"
         app = QtWidgets.QApplication.applicationName()
-        self.view.setWindowTitle(f"{'* ' if dirty else ''}{name} — {app}")
+        self.view.setWindowTitle(f"{'* ' if self.dirty else ''}{name} — {app}")
+
+    def release_history(self):
+        """
+        À la fermeture : la pile se vide en étant détruite (destructeur de QUndoStack) et
+        émet alors indexChanged / cleanChanged, vers une fenêtre déjà détruite.
+        """
+        self.undo_stack.cleanChanged.disconnect(self._update_title)
+        self.undo_stack.indexChanged.disconnect(self._update_title)
+
+    def push(self, command):
+        """Commande dans la pile (son redo() est appliqué) ; ignorée si elle ne change rien."""
+        if not getattr(command, "empty", False):
+            self.undo_stack.push(command)
 
     def select(self, graph_index, dataset_index=None):
         self.graph_index = graph_index
@@ -125,7 +167,68 @@ class MainController(QtCore.QObject):
             dataset_index = 0
         self.dataset_index = dataset_index
         self.calibration_clicks = []
+        self.selected_point = None
+        self.calibration_marker = None
         self.refresh_all(reset_view=True)
+
+    # ------------------------------------------------------------ retours des commandes
+    def _focus(self, graph, dataset=None) -> bool:
+        """Rend courants graph (et dataset), désignés par identité ; True si le graphique change."""
+        index = next((i for i, g in enumerate(self.component.graphs) if g is graph), None)
+        changed = index != self.graph_index
+        self.graph_index = index
+        if changed:
+            self.calibration_clicks = []
+            self.selected_point = None
+            self.calibration_marker = None
+        if graph is not None and dataset is not None:
+            self.dataset_index = next((i for i, d in enumerate(graph.datasets) if d is dataset),
+                                      self.dataset_index)
+        return changed
+
+    def show_points(self, graph, dataset, selected):
+        changed = self._focus(graph, dataset)
+        self.selected_point = selected
+        if changed:
+            self.refresh_all(reset_view=True)
+        else:
+            self.refresh_dataset_views()
+
+    def show_calibration(self, graph, marker):
+        changed = self._focus(graph)
+        self.calibration_marker = marker
+        self.calibration_clicks = []
+        self.refresh_all(reset_view=changed)
+
+    def show_mask(self, graph, dataset):
+        if self._focus(graph, dataset):
+            self.refresh_all(reset_view=True)
+            return
+        self.view.canvas.set_mask(dataset.mask)
+        self.refresh_detection()
+
+    def show_structure(self, graph, item):
+        """Après ajout / suppression : graph None -> item est un graphique."""
+        graphs = self.component.graphs
+        if graph is None:
+            if item is not None:
+                self._focus(item)
+                self.dataset_index = 0 if item.datasets else None
+            else:
+                self.graph_index = min(self.graph_index or 0, len(graphs) - 1) if graphs else None
+                self.dataset_index = 0 if self.graph and self.graph.datasets else None
+            self.calibration_clicks = []
+            self.selected_point = None
+            self.refresh_all(reset_view=True)
+            return
+        changed = self._focus(graph)
+        if item is not None:
+            self.dataset_index = next(i for i, d in enumerate(graph.datasets) if d is item)
+        else:
+            self.dataset_index = (min(self.dataset_index or 0, len(graph.datasets) - 1)
+                                  if graph.datasets else None)
+        self.selected_point = None
+        self.refresh_all(reset_view=changed)
 
     # ============================================================ thème et réglages
     def set_dark_mode(self, enabled: bool):
@@ -193,6 +296,10 @@ class MainController(QtCore.QObject):
         self.path = pathlib.Path(path) if path else None
         self.graph_index = 0 if component.graphs else None
         self.dataset_index = 0 if component.graphs and component.graphs[0].datasets else None
+        self.selected_point = None
+        self.calibration_marker = None
+        self.calibration_clicks = []
+        self.undo_stack.clear()
         self.set_dirty(False)
         self.refresh_all(reset_view=True)
 
@@ -232,8 +339,9 @@ class MainController(QtCore.QObject):
     def add_image(self, array: np.ndarray, name=None, source=""):
         graph = self.component.add_graph(array, name, source)
         graph.datasets[0].tolerance = float(self.options["tolerance"])
-        self.set_dirty()
-        self.select(len(self.component.graphs) - 1, 0)
+        graphs = self.component.graphs
+        graphs.remove(graph)
+        self.push(InsertCommand(self, graphs, len(graphs), graph, True, "Ajouter une image"))
         self.set_mode(Mode.CALIBRATE)
 
     def open_files(self, paths):
@@ -287,6 +395,7 @@ class MainController(QtCore.QObject):
             return False
         self.path = pathlib.Path(path)
         self._remember_dir(path)
+        self.undo_stack.setClean()
         self.set_dirty(False)
         self.view.message(f"Projet enregistré : {path}", 5000)
         return True
@@ -430,6 +539,7 @@ class MainController(QtCore.QObject):
             self.select(g, d)
         else:
             self.dataset_index = d
+            self.selected_point = None
             self.refresh_all()
 
     def tree_item_changed(self, item):
@@ -444,29 +554,26 @@ class MainController(QtCore.QObject):
         self.refresh_curves()
 
     def add_dataset(self):
-        if self.graph is None:
+        graph = self.graph
+        if graph is None:
             return
-        self.graph.add_dataset(tolerance=self.options["tolerance"])
-        self.dataset_index = len(self.graph.datasets) - 1
-        self.set_dirty()
-        self.refresh_all()
+        dataset = graph.add_dataset(tolerance=self.options["tolerance"])
+        graph.datasets.remove(dataset)
+        self.push(InsertCommand(self, graph.datasets, len(graph.datasets), dataset, True,
+                                "Nouvelle courbe", graph=graph))
         if self.view.canvas.mode not in (Mode.ADD, Mode.PAINT, Mode.ERASE):
             self.set_mode(Mode.ADD)
 
     def delete_selection(self):
         if self.graph is None:
             return
+        graph = self.graph
         if self.dataset is not None:
-            del self.graph.datasets[self.dataset_index]
-            self.dataset_index = (min(self.dataset_index, len(self.graph.datasets) - 1)
-                                  if self.graph.datasets else None)
+            self.push(InsertCommand(self, graph.datasets, self.dataset_index, self.dataset,
+                                    False, f"Supprimer « {self.dataset.name} »", graph=graph))
         else:
-            del self.component.graphs[self.graph_index]
-            self.graph_index = (min(self.graph_index, len(self.component.graphs) - 1)
-                                if self.component.graphs else None)
-            self.dataset_index = 0 if self.graph and self.graph.datasets else None
-        self.set_dirty()
-        self.refresh_all(reset_view=True)
+            self.push(InsertCommand(self, self.component.graphs, self.graph_index, graph,
+                                    False, f"Supprimer « {graph.name} »"))
 
     # ============================================================ modes
     def mode_triggered(self, action):
@@ -476,9 +583,11 @@ class MainController(QtCore.QObject):
         self.view.modeActions[mode].setChecked(True)
         self.view.canvas.set_mode(mode)
         self.drag_index = None
+        self.calibration_marker = None
         if mode == Mode.CALIBRATE:
             self.calibration_clicks = []
-            self.view.canvas.set_calibration_points([])
+            self.refresh_calibration_markers()
+        self.refresh_selection()
         self.view.message(self._mode_hint(mode))
 
     def _mode_hint(self, mode: Mode) -> str:
@@ -487,10 +596,15 @@ class MainController(QtCore.QObject):
                       "X2 : un autre point de l'axe X", "Y1 : un point de l'axe Y",
                       "Y2 : un autre point de l'axe Y")
             n = len(self.calibration_clicks)
-            return f"Calibration — cliquez {labels[min(n, 3)]} (molette : zoom)"
+            if n == 0 and self.graph is not None and self.graph.calibrated:
+                return ("Calibration — cliquez un repère pour le déplacer (glisser ou flèches), "
+                        f"ou {labels[0]} pour recommencer")
+            return (f"Calibration — cliquez {labels[min(n, 3)]} ; flèches : ajuster "
+                    "(Maj ×10, Ctrl ×0,1) ; molette : zoom")
         return {
             Mode.NAVIGATE: "Navigation — glisser : déplacer, molette : zoom",
-            Mode.ADD: "Clic : ajouter un point ; glisser un point : le déplacer",
+            Mode.ADD: ("Clic : ajouter un point ; glisser : déplacer ; flèches : ajuster "
+                       "(Maj ×10, Ctrl ×0,1) ; Suppr ; Tab : point suivant"),
             Mode.DELETE: "Clic sur un point : le supprimer",
             Mode.PAINT: "Peindre la zone de la courbe, puis Extraire (Ctrl+E)",
             Mode.ERASE: "Gommer le masque",
@@ -507,35 +621,47 @@ class MainController(QtCore.QObject):
             return
         mode = self.view.canvas.mode
         if mode == Mode.CALIBRATE:
+            marker = self._nearest_marker(x, y) if not self.calibration_clicks else None
+            if marker is not None:
+                # repère existant : sélectionné, déplaçable au glisser et aux flèches
+                self.calibration_marker = marker
+                self.calibration_drag = (marker, self.calibration_points())
+                self.refresh_selection()
+                return
+            self.calibration_marker = None
             self.calibration_clicks.append((x, y))
             self.view.canvas.set_calibration_points(self.calibration_clicks)
+            self.refresh_selection()
             if len(self.calibration_clicks) == 4:
                 self.finish_calibration(self.calibration_clicks)
             else:
                 self.view.message(self._mode_hint(mode))
         elif mode == Mode.ADD:
+            if self.dataset is None:
+                self.add_dataset()
             dataset = self.dataset
-            if dataset is None:
-                dataset = graph.add_dataset()
-                self.dataset_index = len(graph.datasets) - 1
-                self.rebuild_tree()
+            self.drag_before = points_state(dataset)
+            self.drag_selected = self.selected_point
             index = dataset.nearest(x, y, self._tolerance())
             if index is None:
                 index = dataset.add_pixel(x, y, graph.calibration)
-                self.set_dirty()
-                self.refresh_dataset_views()
+                self.drag_text = "Ajouter un point"
+            else:
+                self.drag_text = "Déplacer un point"
             self.drag_index = index
+            self.selected_point = index
+            self.refresh_curves()
+            self.refresh_selection()
         elif mode == Mode.DELETE:
             dataset = self.dataset
             if dataset is not None:
                 index = dataset.nearest(x, y, self._tolerance())
                 if index is not None:
-                    dataset.remove_pixel(index)
-                    self.set_dirty()
-                    self.refresh_dataset_views()
+                    self.delete_point(index)
         elif mode in (Mode.PAINT, Mode.ERASE):
             if self.dataset is None:
                 self.add_dataset()
+            self.mask_before = graph.mask_of(self.dataset).copy()
             self.last_paint = (x, y)
             self._paint((x, y), (x, y))
         elif mode == Mode.PICK:
@@ -559,8 +685,13 @@ class MainController(QtCore.QObject):
         mode = self.view.canvas.mode
         if mode == Mode.ADD and self.drag_index is not None and self.dataset is not None:
             self.dataset.move_pixel(self.drag_index, x, y)
-            self.set_dirty()
             self.refresh_curves()
+            self.refresh_selection()
+        elif mode == Mode.CALIBRATE and self.calibration_drag is not None:
+            marker, points = self.calibration_drag
+            points[marker] = (x, y)
+            self.view.canvas.set_calibration_points(points)
+            self.view.canvas.set_selection((x, y))
         elif mode in (Mode.PAINT, Mode.ERASE) and self.last_paint is not None:
             self._paint(self.last_paint, (x, y))
             self.last_paint = (x, y)
@@ -568,12 +699,27 @@ class MainController(QtCore.QObject):
     def canvas_released(self, x, y):
         mode = self.view.canvas.mode
         if mode == Mode.ADD and self.drag_index is not None:
+            dataset, graph = self.dataset, self.graph
+            index = dataset.sort(graph.calibration, follow=self.drag_index)
             self.drag_index = None
-            if self.dataset is not None:
-                self.dataset.sort(self.graph.calibration)
-            self.refresh_dataset_views()
-        elif mode in (Mode.PAINT, Mode.ERASE):
+            after = points_state(dataset)
+            if same_points(self.drag_before, after):
+                self.selected_point = index
+                self.refresh_dataset_views()
+            else:
+                self.push(PointsCommand(self, graph, dataset, self.drag_before, after,
+                                        self.drag_text, self.drag_selected, index))
+        elif mode == Mode.CALIBRATE and self.calibration_drag is not None:
+            marker, points = self.calibration_drag
+            self.calibration_drag = None
+            if points != self.calibration_points():
+                self.move_markers(points, "Déplacer un repère d'axe")
+        elif mode in (Mode.PAINT, Mode.ERASE) and self.last_paint is not None:
             self.last_paint = None
+            text = "Peindre le masque" if mode == Mode.PAINT else "Gommer le masque"
+            self.push(MaskCommand(self, self.graph, self.dataset, self.mask_before,
+                                  self.dataset.mask, text))
+            self.mask_before = None
             self.refresh_detection()
 
     def _paint(self, start, end):
@@ -588,7 +734,126 @@ class MainController(QtCore.QObject):
         y1 = int(min(h, max(start[1], end[1]) + radius + 3))
         if x0 < x1 and y0 < y1:
             self.view.canvas.update_mask(target, x0, y0, x1, y1)
-        self.set_dirty()
+
+    # ============================================================ clavier et sélection
+    def change_points(self, text, mutate, selected_after=None):
+        """Applique mutate(dataset) et la pousse dans la pile (rien si rien ne change)."""
+        graph, dataset = self.graph, self.dataset
+        before = points_state(dataset)
+        mutate(dataset)
+        after = points_state(dataset)
+        if same_points(before, after):
+            self.refresh_dataset_views()
+            return
+        self.push(PointsCommand(self, graph, dataset, before, after, text,
+                                self.selected_point, selected_after))
+
+    def delete_point(self, index):
+        remaining = len(self.dataset) - 1
+        selected = min(index, remaining - 1) if remaining > 0 else None
+        self.change_points("Supprimer un point", lambda d: d.remove_pixel(index), selected)
+
+    def nudge(self, dx, dy):
+        """Flèches : repère de calibration ou point sélectionné, appuis fusionnés."""
+        graph = self.graph
+        if graph is None:
+            return
+        mode = self.view.canvas.mode
+        if mode == Mode.CALIBRATE:
+            if self.calibration_clicks:
+                x, y = self.calibration_clicks[-1]
+                self.calibration_clicks[-1] = (x + dx, y + dy)
+                self.view.canvas.set_calibration_points(self.calibration_clicks)
+                self.refresh_selection()
+            elif graph.calibrated and self.calibration_marker is not None:
+                points = self.calibration_points()
+                x, y = points[self.calibration_marker]
+                points[self.calibration_marker] = (x + dx, y + dy)
+                self.move_markers(points, "Ajuster un repère d'axe", self.calibration_marker)
+            return
+        dataset, index = self.dataset, self.selected_point
+        if mode != Mode.ADD or dataset is None or index is None or index >= len(dataset):
+            return
+        before = points_state(dataset)
+        x, y = dataset.pixels[index]
+        dataset.move_pixel(index, x + dx, y + dy)
+        new_index = dataset.sort(graph.calibration, follow=index)
+        self.push(PointsCommand(self, graph, dataset, before, points_state(dataset),
+                                "Ajuster un point", index, new_index, merge=True))
+
+    def key_command(self, command):
+        dataset = self.dataset
+        if dataset is None or not len(dataset):
+            return
+        if command == "delete":
+            if self.selected_point is not None and self.selected_point < len(dataset):
+                self.delete_point(self.selected_point)
+            return
+        step = 1 if command == "next" else -1
+        if self.selected_point is None:
+            self.selected_point = 0 if step > 0 else len(dataset) - 1
+        else:
+            self.selected_point = (self.selected_point + step) % len(dataset)
+        self.refresh_selection()
+
+    def table_current_changed(self, row, _column, _previous_row, _previous_column):
+        if self._loading or self.dataset is None or row < 0:
+            return
+        self.selected_point = row
+        self.refresh_selection(select_row=False)
+
+    def refresh_selection(self, select_row=True):
+        """Anneau sur le repère ou le point sélectionné, ligne de la table."""
+        canvas, graph, dataset = self.view.canvas, self.graph, self.dataset
+        point = None
+        if graph is not None and canvas.mode == Mode.CALIBRATE:
+            if self.calibration_clicks:
+                point = self.calibration_clicks[-1]
+            elif self.calibration_marker is not None and graph.calibrated:
+                point = self.calibration_points()[self.calibration_marker]
+        elif dataset is not None and self.selected_point is not None:
+            if self.selected_point < len(dataset):
+                point = dataset.pixels[self.selected_point]
+            else:
+                self.selected_point = None
+        canvas.set_selection(point)
+        if select_row:
+            table = self.view.table
+            self._loading = True
+            if self.selected_point is not None and self.selected_point < table.rowCount():
+                table.selectRow(self.selected_point)
+            else:
+                table.clearSelection()
+            self._loading = False
+
+    def calibration_points(self) -> list:
+        cal = self.graph.calibration
+        return [cal.px_x1, cal.px_x2, cal.px_y1, cal.px_y2]
+
+    def _nearest_marker(self, x, y):
+        graph = self.graph
+        if graph is None or not graph.calibrated:
+            return None
+        points = np.array(self.calibration_points())
+        distance = np.hypot(points[:, 0] - x, points[:, 1] - y)
+        index = int(np.argmin(distance))
+        return index if distance[index] <= self._tolerance() else None
+
+    def move_markers(self, points, text, marker=None):
+        """Nouvelle calibration aux repères déplacés, mêmes valeurs ; dans la pile."""
+        graph = self.graph
+        cal = graph.calibration
+        try:
+            new = AxisCalibration(*points, x1=cal.x1, x2=cal.x2, y1=cal.y1, y2=cal.y2,
+                                  log_x=cal.log_x, log_y=cal.log_y)
+        except CalibrationError as error:
+            self.view.message(f"Calibration : {error}", 5000)
+            self.refresh_calibration_markers()
+            return
+        self.push(CalibrationCommand(self, graph, cal, new, graph.extraction, graph.extraction,
+                                     text, marker))
+        self.calibration_marker = self.calibration_marker if marker is None else marker
+        self.refresh_selection()
 
     def show_coordinates(self, x, y):
         graph = self.graph
@@ -633,19 +898,18 @@ class MainController(QtCore.QObject):
             self.calibration_clicks = []
             self.refresh_calibration_markers()
             return False
-        first = not graph.calibrated
-        graph.set_calibration(calibration)
-        if first:
+        before = dataclasses.replace(graph.extraction)
+        after = dataclasses.replace(graph.extraction)
+        if not graph.calibrated:
             # grille d'extraction par défaut : la plage pointée en X
             low, high = sorted((calibration.x1, calibration.x2))
-            graph.extraction.grid_start, graph.extraction.grid_stop = low, high
+            after.grid_start, after.grid_stop = low, high
             if calibration.log_x:
-                graph.extraction.grid_count = 20
+                after.grid_count = 20
             else:
-                graph.extraction.grid_step = (high - low) / 20
+                after.grid_step = (high - low) / 20
         self.calibration_clicks = []
-        self.set_dirty()
-        self.refresh_all()
+        self.push(CalibrationCommand(self, graph, graph.calibration, calibration, before, after))
         skew = calibration.skew_degrees()
         self.set_mode(Mode.ADD)
         if skew > 1.0:
@@ -657,12 +921,13 @@ class MainController(QtCore.QObject):
 
     # ============================================================ masque, extraction
     def clear_mask(self):
-        if self.dataset is None or self.dataset.mask is None:
+        dataset = self.dataset
+        if dataset is None or dataset.mask is None or not dataset.mask.any():
             return
-        self.dataset.mask[...] = False
-        self.view.canvas.set_mask(self.dataset.mask)
-        self.set_dirty()
-        self.refresh_detection()
+        before = dataset.mask.copy()
+        dataset.mask[...] = False
+        self.push(MaskCommand(self, self.graph, dataset, before, dataset.mask,
+                              "Effacer le masque"))
 
     def foreground(self):
         dataset = self.dataset
@@ -696,10 +961,11 @@ class MainController(QtCore.QObject):
         if len(points) == 0:
             self.view.error("Extraction", "Aucun point extrait.")
             return
-        self.dataset.pixels = points
-        self.dataset.sort(graph.calibration)
-        self.set_dirty()
-        self.refresh_dataset_views()
+        def replace(dataset):
+            dataset.pixels = points
+            dataset.sort(graph.calibration)
+
+        self.change_points("Extraire la courbe", replace)
         unmasked = "" if self.dataset.mask is not None and self.dataset.mask.any() else \
             " (sans masque : toute l'image a été parcourue)"
         self.view.message(f"{len(points)} points extraits{unmasked}", 6000)
@@ -713,13 +979,12 @@ class MainController(QtCore.QObject):
         formula = params["Formule"]
         data = dataset.data(graph.calibration)
         try:
-            dataset.fit = fit.fit(formula, data[:, 0], data[:, 1],
-                                  relative=params["Erreur relative"])
+            result = fit.fit(formula, data[:, 0], data[:, 1], relative=params["Erreur relative"])
         except FormulaError as error:
             self.view.error("Modèle", str(error))
             return
-        self.set_dirty()
-        self.refresh_dataset_views()
+        self.change_points("Ajuster le modèle", lambda d: setattr(d, "fit", result),
+                           self.selected_point)
 
     def model_pixels(self, graph, dataset):
         """Courbe du modèle ajusté, en pixels, sur la plage des points."""
@@ -784,12 +1049,13 @@ class MainController(QtCore.QObject):
         for child, change, _ in changes:
             if change == "activated":
                 if child.name() == "Trier par X":
-                    dataset.sort(self.graph.calibration)
+                    self.change_points("Trier les points",
+                                       lambda d: d.sort(self.graph.calibration))
                 elif child.name() == "Effacer les points":
-                    dataset.pixels = np.empty((0, 2))
-                    dataset.fit = None
-                self.set_dirty()
-                self.refresh_dataset_views()
+                    def clear(d):
+                        d.pixels = np.empty((0, 2))
+                        d.fit = None
+                    self.change_points("Effacer les points", clear)
                 return
         dataset.name = param["Nom"]
         dataset.condition = param["Condition"]
@@ -858,9 +1124,8 @@ class MainController(QtCore.QObject):
                 if child.name() == "Ajuster":
                     self.fit_model()
                 elif child.name() == "Supprimer le modèle" and self.dataset is not None:
-                    self.dataset.fit = None
-                    self.set_dirty()
-                    self.refresh_dataset_views()
+                    self.change_points("Supprimer le modèle", lambda d: setattr(d, "fit", None),
+                                       self.selected_point)
                 return
             if change == "value" and child.name() == "Modèle type" and data:
                 self._loading = True
@@ -885,12 +1150,18 @@ class MainController(QtCore.QObject):
                 self.view.message("Valeur impossible sur un axe logarithmique", 5000)
                 self.refresh_table()
                 return
-            dataset.move_pixel(row, *pixel)
         else:
-            dataset.move_pixel(row, *data[row])
-        dataset.sort(graph.calibration)
-        self.set_dirty()
-        self.refresh_dataset_views()
+            pixel = data[row]
+        result = {}
+
+        def edit(d):
+            d.move_pixel(row, *pixel)
+            result["index"] = d.sort(graph.calibration, follow=row)
+
+        before = points_state(dataset)
+        edit(dataset)
+        self.push(PointsCommand(self, graph, dataset, before, points_state(dataset),
+                                "Modifier un point", self.selected_point, result["index"]))
 
     # ============================================================ rafraîchissements
     def refresh_all(self, reset_view=False):
@@ -911,6 +1182,7 @@ class MainController(QtCore.QObject):
         self.fill_dataset()
         self.fill_model()
         self._update_tree_counts()
+        self.refresh_selection()
 
     def _update_tree_counts(self):
         self._loading = True
@@ -934,6 +1206,7 @@ class MainController(QtCore.QObject):
             self.view.canvas.set_calibration_points([cal.px_x1, cal.px_x2, cal.px_y1, cal.px_y2])
         else:
             self.view.canvas.set_calibration_points([])
+        self.refresh_selection()
 
     def refresh_curves(self):
         graph = self.graph

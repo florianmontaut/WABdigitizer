@@ -119,6 +119,7 @@ class MainWindow(QtWidgets.QMainWindow):
             bar.addAction(act)
         bar = self.addToolBar("Numérisation")
         bar.setMovable(False)
+        self.digitizeBar = bar
         for act in self.modeActions.values():
             bar.addAction(act)
         bar.addSeparator()
@@ -154,6 +155,7 @@ class MainWindow(QtWidgets.QMainWindow):
         menu = self.menuBar().addMenu("&Outils")
         menu.addAction(self.actionCompare)
         menu = self.menuBar().addMenu("&Édition")
+        self.editMenu = menu
         menu.addAction(self.actionCopyTable)
         menu.addAction(self.actionCopyLut)
         menu.addSeparator()
@@ -207,6 +209,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().addPermanentWidget(self.coordinates)
 
     # ============================================================ affichage
+    def add_history_actions(self, undo: QtGui.QAction, redo: QtGui.QAction):
+        """Annuler / Refaire (créées par la pile du contrôleur) : barre et menu Édition."""
+        undo.setShortcut(QtGui.QKeySequence.StandardKey.Undo)
+        redo.setShortcuts([QtGui.QKeySequence("Ctrl+Y"), QtGui.QKeySequence("Ctrl+Shift+Z")])
+        theme.set_action_icon(undo, "undo")
+        theme.set_action_icon(redo, "redo")
+        first = self.digitizeBar.actions()[0]
+        self.digitizeBar.insertActions(first, [undo, redo])
+        self.digitizeBar.insertSeparator(first)
+        first = self.editMenu.actions()[0]
+        self.editMenu.insertActions(first, [undo, redo])
+        self.editMenu.insertSeparator(first)
+        self.actionUndo, self.actionRedo = undo, redo
+
     def refresh_theme(self):
         """Couleurs des graphiques : à rappeler après theme.apply()."""
         colors = theme.colors()

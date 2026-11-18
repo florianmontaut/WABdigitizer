@@ -112,10 +112,18 @@ class Dataset:
         index = int(np.argmin(distance))
         return index if distance[index] <= radius else None
 
-    def sort(self, calibration: AxisCalibration | None = None):
-        if len(self.pixels):
-            order = np.argsort(self._sort_keys(self.pixels, calibration), kind="stable")
-            self.pixels = self.pixels[order]
+    def sort(self, calibration: AxisCalibration | None = None, follow: int | None = None):
+        """
+        Range les points par X croissant. follow : indice d'un point avant le tri ;
+        renvoie son indice après (None si follow est None).
+        """
+        if not len(self.pixels):
+            return None
+        order = np.argsort(self._sort_keys(self.pixels, calibration), kind="stable")
+        self.pixels = self.pixels[order]
+        if follow is None:
+            return None
+        return int(np.flatnonzero(order == follow)[0])
 
     @staticmethod
     def _sort_keys(pixels, calibration):

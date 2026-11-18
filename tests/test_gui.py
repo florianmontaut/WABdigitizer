@@ -310,3 +310,216 @@ def test_comparateur(ctrl, tmp_path):
     assert cmp.selected == [] and view.table.rowCount() == 0
     ctrl.view.actionDark.setChecked(True)                     # thème propagé sans erreur
     ctrl.view.actionDark.setChecked(False)
+
+
+# ---------------------------------------------------------------- annuler / refaire, clavier
+def click(ctrl, x, y, to=None):
+    ctrl.canvas_pressed(x, y)
+    if to is not None:
+        ctrl.canvas_moved(*to, True)
+    ctrl.canvas_released(*(to or (x, y)))
+
+
+def key(ctrl, k, modifiers=QtCore.Qt.KeyboardModifier.NoModifier):
+    from PyQt6 import QtTest
+    QtTest.QTest.keyClick(ctrl.view.canvas, k, modifiers)
+
+
+def test_annuler_refaire_ajout_deplacement_suppression(ctrl):
+    graph = calibrated(ctrl)
+    stack = ctrl.undo_stack
+    click(ctrl, 300, 250)                                  # (5, 15)
+    click(ctrl, 200, 300)                                  # (2.5, 10)
+    click(ctrl, 200, 300, to=(220, 280))                   # déplacé en (3, 12)
+    ctrl.set_mode(Mode.DELETE)
+    click(ctrl, 300, 250)
+    dataset = ctrl.dataset
+    assert np.allclose(dataset.data(graph.calibration), [(3, 12)])
+    assert stack.undoText() == "Supprimer un point"
+
+    stack.undo()
+    assert np.allclose(dataset.data(graph.calibration), [(3, 12), (5, 15)])
+    stack.undo()
+    assert np.allclose(dataset.data(graph.calibration), [(2.5, 10), (5, 15)])
+    stack.undo()
+    stack.undo()
+    assert len(dataset) == 0
+    for _ in range(4):
+        stack.redo()
+    assert np.allclose(dataset.data(graph.calibration), [(3, 12)])
+    assert ctrl.view.table.rowCount() == 1
+
+
+def test_clic_sans_mouvement_ne_remplit_pas_la_pile(ctrl):
+    calibrated(ctrl)
+    click(ctrl, 300, 250)
+    count = ctrl.undo_stack.count()
+    click(ctrl, 300.5, 250.5)                              # clic sur le point : sélection seule
+    assert ctrl.undo_stack.count() == count and ctrl.selected_point == 0
+
+
+def test_fleches_sur_le_point_selectionne(ctrl):
+    calibrated(ctrl)
+    click(ctrl, 300, 250)
+    click(ctrl, 200, 300)                                  # sélectionné : le dernier placé
+    assert ctrl.selected_point == 0                        # rangé par X
+    count = ctrl.undo_stack.count()
+    px = ctrl.view.canvas.pixel_size()                     # pixels de l'image par pixel d'écran
+    key(ctrl, QtCore.Qt.Key.Key_Right)                     # +1 pixel d'écran
+    key(ctrl, QtCore.Qt.Key.Key_Right, QtCore.Qt.KeyboardModifier.ShiftModifier)   # +10
+    key(ctrl, QtCore.Qt.Key.Key_Up, QtCore.Qt.KeyboardModifier.ControlModifier)    # -0,1
+    assert np.allclose(ctrl.dataset.pixels[0], (200 + 11 * px, 300 - 0.1 * px))
+    assert ctrl.undo_stack.count() == count + 1            # appuis fusionnés
+    assert ctrl.undo_stack.undoText() == "Ajuster un point"
+    assert np.allclose(ctrl.view.canvas.selection_item.data["x"], [200 + 11 * px])
+    ctrl.undo_stack.undo()
+    assert np.allclose(ctrl.dataset.pixels[0], (200, 300))
+
+    # le point dépasse son voisin en X : il est retrié et reste sélectionné
+    presses = int(np.ceil(101 / (10 * px)))
+    for _ in range(presses):
+        key(ctrl, QtCore.Qt.Key.Key_Right, QtCore.Qt.KeyboardModifier.ShiftModifier)
+    assert ctrl.selected_point == 1
+    assert np.allclose(ctrl.dataset.pixels[1], (200 + 10 * px * presses, 300))
+    assert ctrl.view.table.currentRow() == 1
+
+
+def test_pas_des_fleches_suit_le_zoom(ctrl):
+    calibrated(ctrl)
+    canvas = ctrl.view.canvas
+    canvas.resize(800, 600)
+    canvas.view_box.setRange(xRange=(0, 600), yRange=(0, 500), padding=0)
+    wide = canvas.pixel_size()
+    canvas.view_box.setRange(xRange=(290, 310), yRange=(240, 260), padding=0)
+    close = canvas.pixel_size()
+    assert close < wide / 10                               # zoomé : pixel d'écran plus petit
+    click(ctrl, 300, 250)
+    key(ctrl, QtCore.Qt.Key.Key_Right)
+    assert ctrl.dataset.pixels[0][0] == pytest.approx(300 + close)
+    assert close < 0.1                                     # bien plus fin qu'un pixel de l'image
+
+
+def test_tab_et_suppr(ctrl):
+    calibrated(ctrl)
+    for x in (150, 250, 350):
+        click(ctrl, x, 300)
+    key(ctrl, QtCore.Qt.Key.Key_Tab)                       # du 3e au 1er (boucle)
+    assert ctrl.selected_point == 0
+    key(ctrl, QtCore.Qt.Key.Key_Tab)
+    key(ctrl, QtCore.Qt.Key.Key_Backtab)
+    key(ctrl, QtCore.Qt.Key.Key_Tab)
+    assert ctrl.selected_point == 1
+    key(ctrl, QtCore.Qt.Key.Key_Delete)
+    assert np.allclose(ctrl.dataset.pixels[:, 0], [150, 350])
+    assert ctrl.selected_point == 1
+    ctrl.view.table.setCurrentCell(0, 0)                   # sélection depuis la table
+    assert ctrl.selected_point == 0
+    ctrl.set_mode(Mode.NAVIGATE)                           # hors édition : touches ignorées
+    key(ctrl, QtCore.Qt.Key.Key_Delete)
+    assert len(ctrl.dataset) == 2
+
+
+def test_fleches_pendant_et_apres_la_calibration(ctrl):
+    ctrl.add_image(graph_image())
+    px = ctrl.view.canvas.pixel_size()
+    ctrl.canvas_pressed(100 - px, 400 + px)                # X1 un pixel d'écran à côté
+    key(ctrl, QtCore.Qt.Key.Key_Right)
+    key(ctrl, QtCore.Qt.Key.Key_Up)
+    assert ctrl.calibration_clicks == [pytest.approx((100, 400))]
+    for x, y in CLICKS[1:]:
+        ctrl.canvas_pressed(x, y)
+    assert ctrl.apply_calibration(ctrl.calibration_clicks, VALUES)
+    graph = ctrl.graph
+    stack = ctrl.undo_stack
+    assert stack.undoText() == "Calibrer les axes"
+
+    # repère X2 sélectionné puis ajusté : calibration recalculée, une étape
+    ctrl.set_mode(Mode.CALIBRATE)
+    click(ctrl, 500.5, 400.5)
+    assert ctrl.calibration_marker == 1 and ctrl.calibration_clicks == []
+    px = ctrl.view.canvas.pixel_size()
+    for _ in range(4):
+        key(ctrl, QtCore.Qt.Key.Key_Right, QtCore.Qt.KeyboardModifier.ShiftModifier)
+    moved = 500 + 40 * px
+    assert graph.calibration.px_x2 == pytest.approx((moved, 400.0))
+    assert graph.calibration.pixel_to_data([(moved, 400)])[0] == pytest.approx((10, 0))
+    assert stack.undoText() == "Ajuster un repère d'axe"
+    stack.undo()
+    assert graph.calibration.px_x2 == (500.0, 400.0)
+
+    # repère glissé à la souris
+    click(ctrl, 100, 100, to=(100, 90))
+    assert graph.calibration.px_y2 == (100.0, 90.0)
+    stack.undo()
+    stack.undo()                                           # calibration elle-même
+    assert not graph.calibrated
+    stack.redo()
+    assert graph.calibrated and graph.extraction.grid_stop == 10
+
+
+def test_annuler_le_masque_et_l_extraction(ctrl):
+    calibrated(ctrl)
+    ctrl.set_mode(Mode.PAINT)
+    click(ctrl, 150, 345, to=(450, 195))
+    dataset = ctrl.dataset
+    painted = dataset.mask.copy()
+    assert painted.any()
+    command = ctrl.undo_stack.command(ctrl.undo_stack.index() - 1)
+    assert command.region_before.size < painted.size / 2      # seule la zone touchée
+    dataset.curve_color = (220, 20, 20)
+    ctrl.extract()
+    assert len(dataset) > 5
+    ctrl.clear_mask()
+    assert not dataset.mask.any()
+
+    ctrl.undo_stack.undo()                                 # effacer le masque
+    assert np.array_equal(dataset.mask, painted)
+    ctrl.undo_stack.undo()                                 # extraction
+    assert len(dataset) == 0
+    ctrl.undo_stack.undo()                                 # coup de pinceau
+    assert not dataset.mask.any()
+    ctrl.undo_stack.redo()
+    assert np.array_equal(dataset.mask, painted)
+
+
+def test_annuler_courbes_et_graphiques(ctrl):
+    graph = calibrated(ctrl)
+    click(ctrl, 300, 250)
+    first = ctrl.dataset
+    ctrl.add_dataset()
+    assert len(graph.datasets) == 2
+    ctrl.delete_selection()                                # la nouvelle courbe
+    ctrl.dataset_index = 0
+    ctrl.delete_selection()                                # la première, avec son point
+    assert graph.datasets == []
+    ctrl.undo_stack.undo()
+    assert graph.datasets == [first] and len(first) == 1 and ctrl.dataset is first
+
+    ctrl.add_image(graph_image(), "second")
+    assert len(ctrl.component.graphs) == 2 and ctrl.graph.name == "second"
+    ctrl.undo_stack.undo()
+    assert len(ctrl.component.graphs) == 1 and ctrl.graph is graph
+
+    ctrl.dataset_index = None
+    ctrl.delete_selection()                                # le graphique entier
+    assert ctrl.component.graphs == [] and ctrl.graph is None
+    ctrl.undo_stack.undo()
+    assert ctrl.component.graphs == [graph] and ctrl.graph is graph
+
+
+def test_etat_modifie_suit_la_pile(ctrl, tmp_path):
+    calibrated(ctrl)
+    click(ctrl, 300, 250)
+    assert ctrl.dirty and ctrl.view.windowTitle().startswith("* ")
+    path = tmp_path / ("p" + document.PROJECT_SUFFIX)
+    assert ctrl.write_project(path)
+    assert not ctrl.dirty
+    ctrl.undo_stack.undo()
+    assert ctrl.dirty
+    ctrl.undo_stack.redo()
+    assert not ctrl.dirty                                  # retour à l'état enregistré
+    ctrl.view.params["dataset"]["Condition"] = "Tj = 25 °C"   # propriété : hors pile
+    assert ctrl.dirty
+    ctrl.load_project(path)
+    assert not ctrl.dirty and ctrl.undo_stack.count() == 0
+    assert not ctrl.view.actionUndo.isEnabled()

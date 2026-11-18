@@ -32,6 +32,19 @@ python -m pytest tests
    points ; courbe du modèle en pointillés sur l'image pour vérification.
 6. **Enregistrer** (`*.pdig.json`, image comprise) et **exporter**.
 
+Clavier (cliquer d'abord dans l'image) :
+
+| Touche | Effet |
+|---|---|
+| Flèches | calibration : dernier repère placé, ou repère cliqué ; ajout : point sélectionné. Un pixel de l'écran par appui (Maj ×10, Ctrl ×0,1) : plus on zoome, plus le déplacement est fin |
+| Suppr | supprime le point sélectionné |
+| Tab / Maj+Tab | point suivant / précédent |
+| Ctrl+Z / Ctrl+Y | annuler / refaire : points (ajout, déplacement, suppression, extraction, table), calibration, coups de pinceau, courbes et graphiques |
+
+Le point sélectionné (cerclé) est le dernier placé ou cliqué, ou la ligne choisie dans la
+table. En mode calibration, un clic sur un repère existant le sélectionne : il se glisse
+ou s'ajuste aux flèches, la calibration est recalculée.
+
 Méthodes d'extraction :
 
 | Méthode | Résultat |
