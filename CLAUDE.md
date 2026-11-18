@@ -46,12 +46,21 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     `Component.plecs`. Référence : `tests/plecs_reference_PMF75-120.xml`, fichier fait à
     la main par l'utilisateur, que `test_plecs.py` reproduit. Les XSD de l'ancien dépôt
     (générés depuis ce seul exemple) ne sont pas fiables : non utilisés.
+  - `compare.py` : comparaison entre composants de tous types. Courbes regroupées par
+    dimensions physiques (X, Y) de leurs unités (`formules.units`), sinon par noms des
+    grandeurs ; `Frame` : unités communes (celles de la première courbe) ; valeurs au
+    curseur et écarts, table sur X communs. Lit fiches et projets via
+    `export.component_dict`.
+- `view/compare_window.py` + `controller/compare_controller.py` : fenêtre de comparaison
+  non modale, enfant de la fenêtre principale, créée une fois (`MainController.open_compare`),
+  composant ouvert lu par `weakref.WeakMethod`, réglages partagés (`options`).
 - `view/` : `canvas.py` (image en row-major dans une ViewBox à Y inversé : pixels de
   l'image = coordonnées de la vue ; émet pressed / moved / released en pixels),
   `main_window.py`, `properties.py` (groupes du ParameterTree), `dialogs.py`.
 - `controller/main_controller.py` : modes du canevas, calibration, édition, extraction,
   modèle, fichiers, exports.
-- `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_gui.py` (contrôleur sans écran).
+- `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_compare.py`, `test_gui.py`
+  (contrôleurs sans écran).
 
 ## Choix de conception à respecter
 
@@ -66,6 +75,8 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   pas sans écran (`finish_calibration`), les tests appellent `apply_calibration`.
 
 ## Non fait / pistes
+
+- Comparaison : grandeurs dérivées (pertes P = v·i, mise en parallèle de n composants).
 
 - Export PLECS : jamais importé dans PLECS lui-même ; classes « IGBT with Diode » /
   « MOSFET with Diode », modèle de Cauer, ajustement de Foster sur une courbe Zth(t).

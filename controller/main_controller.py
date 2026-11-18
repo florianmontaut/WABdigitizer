@@ -17,7 +17,9 @@ from ressources import app_settings
 from model import document, export, extraction, fit, mask, plecs
 from model.calibration import AxisCalibration, CalibrationError
 from model.plecs import PlecsError
+from controller.compare_controller import CompareController
 from view.canvas import Mode
+from view.compare_window import CompareWindow
 from view.dialogs import CalibrationDialog, format_value, parse_value
 from view.main_window import IMAGE_SUFFIXES, qimage_to_array
 
@@ -47,6 +49,7 @@ class MainController(QtCore.QObject):
         self.drag_index = None
         self.last_paint = None
         self._loading = False            # remplissage des paramètres en cours
+        self.compare = None              # contrôleur de la fenêtre de comparaison
 
         # modèles Qt parentés à leur vue : détruits avec elle, dans l'ordre
         self.tree_model = QtGui.QStandardItemModel(view.tree)
@@ -63,6 +66,7 @@ class MainController(QtCore.QObject):
         view.actionExportGrid.triggered.connect(self.export_grid)
         view.actionExportComponent.triggered.connect(self.export_component)
         view.actionExportPlecs.triggered.connect(self.export_plecs)
+        view.actionCompare.triggered.connect(self.open_compare)
         view.actionCopyTable.triggered.connect(self.copy_table)
         view.actionCopyLut.triggered.connect(self.copy_lut)
         view.actionQuit.triggered.connect(view.close)
@@ -132,6 +136,29 @@ class MainController(QtCore.QObject):
         theme.apply(QtWidgets.QApplication.instance(), self.options["dark_mode"],
                     extra_qss=theme.ITEM_VIEW_QSS)
         self.view.refresh_theme()
+        if self.compare is not None:
+            self.compare.view.refresh_theme()
+
+    # ============================================================ comparaison
+    def current_sheet(self):
+        """Fiche du composant ouvert (courbes calibrées), None s'il n'en a pas."""
+        sheet = export.component_dict(self.component)
+        return sheet if any(g["curves"] for g in sheet["graphs"]) else None
+
+    def open_compare(self):
+        """
+        Fenêtre non modale, créée une fois : enfant de la fenêtre principale (détruite
+        avec elle), le composant ouvert lu par référence faible.
+        """
+        if self.compare is None:
+            window = CompareWindow(self.view)
+            self.compare = CompareController(window, self.options,
+                                             weakref.WeakMethod(self.current_sheet))
+        else:
+            self.compare.reload()
+        self.compare.view.show()
+        self.compare.view.raise_()
+        self.compare.view.activateWindow()
 
     def edit_options(self):
         dialog = options_panel.OptionsPannel(self.schema, self.options, self.view)

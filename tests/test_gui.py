@@ -1,5 +1,7 @@
 import json
 
+from PyQt6 import QtCore
+
 import numpy as np
 import pytest
 from qtsocle import options_panel, theme
@@ -252,3 +254,59 @@ def test_export_plecs_depuis_l_interface(ctrl, tmp_path):
     assert on["current"] == [0, 2, 4, 6, 8, 10]
     assert np.allclose(on["values"][0][1], [0, 6, 12, 18, 24, 30], atol=0.05)
     assert tables["foster"] == [(0.1, 0.01), (0.2, 0.1)]
+
+
+def test_comparateur(ctrl, tmp_path):
+    """Librairie (IGBT, MOSFET, diode) + composant ouvert, comparés en conduction."""
+    from test_compare import sheet, write
+    library = tmp_path / "library"
+    library.mkdir(exist_ok=True)
+    write(library, "igbt.json", sheet("IGBT1", "IGBT", [
+        ("VCE(IC)", ("IC", "A", False), ("VCE", "V", False),
+         [("Tj 125", "Tj = 125 °C", [0, 100, 200], [0.8, 1.6, 2.4])])]))
+    write(library, "mosfet.json", sheet("MOS1", "MOSFET", [
+        ("VDS(ID)", ("ID", "kA", False), ("VDS", "mV", False),
+         [("Tj 125", "Tj = 125 °C", [0, 0.1, 0.2], [0, 1000, 2000])])]))
+    write(library, "e.json", sheet("IGBT2", "IGBT", [
+        ("Eon", ("IC", "A", False), ("Eon", "mJ", False), [("Eon", "", [1, 2], [1, 2])])]))
+
+    graph = calibrated(ctrl)                                  # composant ouvert : 0..10 A, 0..30 V
+    ctrl.view.params["graph"]["Unité X"] = "A"
+    ctrl.view.params["graph"]["Unité Y"] = "V"
+    ctrl.view.params["component"]["Nom"] = "Ouvert"
+    for x, y in [(100, 400), (500, 100)]:
+        ctrl.canvas_pressed(x, y)
+        ctrl.canvas_released(x, y)
+
+    ctrl.open_compare()
+    cmp = ctrl.compare
+    view = cmp.view
+    assert "tension en fonction de courant" in view.characteristic.currentText()
+    assert "3 composant(s)" in view.characteristic.currentText()
+    assert cmp.tree_model.rowCount() == 3                     # Eon dans une autre caractéristique
+    keys = {c.component: c.key for c in cmp.curves}
+    assert "Ouvert" in keys
+
+    cmp.set_checked([keys["IGBT1"], keys["MOS1"], keys["Ouvert"]])
+    assert cmp.frame.y_axis.unit == "V" and cmp.frame.x_axis.unit == "A"
+    cmp.set_cursor(100.0)
+    assert view.table.rowCount() == 3
+    assert view.table.item(0, 2).text() == "référence"
+    assert view.table.item(1, 1).text() == "1 V"              # MOSFET converti (kA, mV)
+    assert view.table.item(1, 3).text() == "-37.5 %"
+    assert view.table.item(2, 1).text() == "hors plage"       # ouvert : 0..10 A
+
+    view.filter.setText("mos")
+    assert cmp.tree_model.rowCount() == 1
+    assert len(cmp.selected) == 3                              # le filtre ne décoche pas
+
+    csv_path, png_path = tmp_path / "c.csv", tmp_path / "c.png"
+    assert cmp.export_csv(csv_path) and cmp.export_image(png_path)
+    assert csv_path.read_text(encoding="utf-8").splitlines()[0].startswith("IC / ID (A);")
+    assert png_path.stat().st_size > 1000
+
+    index = view.characteristic.findText("énergie", QtCore.Qt.MatchFlag.MatchContains)
+    view.characteristic.setCurrentIndex(index)
+    assert cmp.selected == [] and view.table.rowCount() == 0
+    ctrl.view.actionDark.setChecked(True)                     # thème propagé sans erreur
+    ctrl.view.actionDark.setChecked(False)

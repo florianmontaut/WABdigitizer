@@ -61,6 +61,21 @@ Méthodes d'extraction :
   automatique) ; options : point (0, 0), ligne 0 V d'énergie nulle, facteur de sécurité
   `Csecu`, modèle thermique de Foster (lignes « R tau »).
 
+## Comparer des composants
+
+Outils › Comparer des composants (`Ctrl+Shift+K`), fenêtre à côté de la numérisation.
+
+- Composants lus : fiches et projets du **répertoire de la librairie** (sous-dossiers
+  compris), fichiers ajoutés à la main, et le composant ouvert.
+- **Caractéristique** : les courbes sont comparables quand leurs axes ont les mêmes
+  dimensions physiques, quel que soit le type de composant : VCE(IC) d'un IGBT, VDS(ID)
+  d'un MOSFET et VF(IF) d'une diode sont toutes « tension en fonction de courant ». Les
+  unités sont converties vers celles de la première courbe cochée (kA, mV, µJ...).
+- Cocher les courbes voulues (filtre par nom, catégorie, condition).
+- **Curseur** vertical (déplaçable ou saisi) : valeur de chaque courbe, écart absolu et
+  relatif à une courbe de référence. Interpolation en log sur un axe log.
+- Exports : CSV des courbes cochées sur des X communs, image PNG du graphique.
+
 ## Construire l'exécutable
 
 ```

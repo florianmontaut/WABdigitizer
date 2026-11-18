@@ -109,6 +109,9 @@ class MainWindow(QtWidgets.QMainWindow):
                               "Supprimer le graphique ou la courbe sélectionné")
         self.actionOptions = a("Options...", "settings", "Options de l'application")
         self.actionDark = a("Thème sombre", "moon", checkable=True)
+        self.actionCompare = a("Comparer des composants...", "compare",
+                               "Courbes de plusieurs composants sur des axes communs",
+                               "Ctrl+Shift+K")
 
         bar = self.addToolBar("Fichier")
         bar.setMovable(False)
@@ -148,6 +151,8 @@ class MainWindow(QtWidgets.QMainWindow):
         for act in (self.actionClearMask, self.actionDetection, self.actionExtract,
                     self.actionFit, self.actionAddCurve, self.actionDelete):
             menu.addAction(act)
+        menu = self.menuBar().addMenu("&Outils")
+        menu.addAction(self.actionCompare)
         menu = self.menuBar().addMenu("&Édition")
         menu.addAction(self.actionCopyTable)
         menu.addAction(self.actionCopyLut)
