@@ -41,6 +41,7 @@ CURSORS = {
 MASK_RGBA = (255, 200, 0, 255)
 DETECTION_RGBA = (0, 200, 255, 255)
 CALIBRATION_LABELS = ("X1", "X2", "Y1", "Y2")
+ORTHOGONAL_LABELS = ("O", "X2", "Y2")
 
 
 def _rgba(color, alpha=255):
@@ -150,8 +151,12 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
         self.detection_item.setImage(rgba, autoLevels=False, levels=(0, 255))
 
     # ============================================================ calibration
-    def set_calibration_points(self, points):
-        """Points pointés (0 à 4), dans l'ordre X1, X2, Y1, Y2."""
+    def set_calibration_points(self, points, orthogonal=False):
+        """
+        Repères pointés, dans l'ordre :
+            4 points    X1, X2, Y1, Y2 (segments X1-X2 et Y1-Y2)
+            orthogonal  O, X2, Y2 (0 à 3 points ; segments O-X2 et O-Y2)
+        """
         for text in self.calibration_texts:
             self.view_box.removeItem(text)
         self.calibration_texts = []
@@ -160,15 +165,17 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
             self.calibration_points.setData(pos=points)
         else:
             self.calibration_points.clear()
-        for label, (x, y) in zip(CALIBRATION_LABELS, points):
+        labels = ORTHOGONAL_LABELS if orthogonal else CALIBRATION_LABELS
+        for label, (x, y) in zip(labels, points):
             text = pg.TextItem(label, color="#0B6BCB", anchor=(-0.15, 1.1))
             text.setPos(x, y)
             text.setZValue(31)
             self.view_box.addItem(text)
             self.calibration_texts.append(text)
-        for line, pair in zip(self.calibration_lines, (points[0:2], points[2:4])):
-            if len(pair) == 2:
-                line.setData([pair[0][0], pair[1][0]], [pair[0][1], pair[1][1]])
+        pairs = ((0, 1), (0, 2)) if orthogonal else ((0, 1), (2, 3))
+        for line, (a, b) in zip(self.calibration_lines, pairs):
+            if b < len(points):
+                line.setData([points[a][0], points[b][0]], [points[a][1], points[b][1]])
             else:
                 line.setData([], [])
 

@@ -20,8 +20,12 @@ python -m pytest tests
 
 1. **Image** : `Ctrl+I`, `Ctrl+V` (capture d'un PDF) ou glisser-déposer. Un composant
    regroupe plusieurs graphiques (VCE(IC), Eon(IC), Coss(VDS)...).
-2. **Calibrer** (`C`) : cliquer X1, X2 sur l'axe X puis Y1, Y2 sur l'axe Y, saisir leurs
-   valeurs (axes log possibles). Une image légèrement de travers est acceptée.
+2. **Calibrer** (`C`) : cliquer l'origine **O** (croisement des axes), **X2** sur l'axe X
+   et **Y2** sur l'axe Y, puis saisir les valeurs (X et Y à l'origine, X2, Y2 ; axes log
+   possibles). X2 est ramené à la hauteur de O et Y2 à son abscisse : un clic
+   approximatif suffit, l'aperçu suit la souris.
+   Graphique tourné, ou axes qui ne se croisent pas à l'origine : décocher Options ›
+   Numérisation › « Repère orthonormé » pour pointer 4 points libres X1, X2, Y1, Y2.
 3. **Relever** une courbe :
    - à la main (`A`) : clic = point, glisser = déplacer ; `D` : supprimer ;
    - ou automatiquement : pinceau (`B`) le long de la courbe, pipette (`P`) sur la courbe

@@ -259,3 +259,27 @@ def test_exports(tmp_path):
     assert sheet["format"] == export.COMPONENT_FORMAT
     curve = sheet["graphs"][0]["curves"][0]
     assert curve["x"] == pytest.approx([2, 5, 8]) and "model" in curve
+
+
+# ---------------------------------------------------------------- repère orthonormé
+def test_repere_orthonorme_trois_points():
+    from model.calibration import orthogonal_points, to_four_points
+    assert orthogonal_points((100, 400)) == [(100, 400)]
+    assert orthogonal_points((100, 400), (500, 397)) == [(100, 400), (500, 400)]
+    o, x2, y1, y2 = to_four_points((100, 400), (500, 397), (103, 100))
+    assert (o, x2, y1, y2) == ((100, 400), (500, 400), (100, 400), (100, 100))
+    cal = AxisCalibration(o, x2, y1, y2, 0, 10, 0, 30)
+    assert cal.orthogonal and cal.markers() == [(100, 400), (500, 400), (100, 100)]
+    assert np.allclose(cal.pixel_to_data([(300, 250)]), [(5, 15)])
+
+    # O déplacé : l'axe X le suit en hauteur, l'axe Y en abscisse
+    moved = cal.with_markers([(110, 410), (500, 400), (100, 100)])
+    assert moved.markers() == [(110, 410), (500, 410), (110, 100)]
+    assert moved.orthogonal and (moved.x2, moved.y2) == (10, 30)
+
+
+def test_calibration_quatre_points_non_orthonormee():
+    cal = AxisCalibration((100, 400), (500, 410), (90, 400), (100, 100), 0, 10, 0, 30)
+    assert not cal.orthogonal and len(cal.markers()) == 4
+    moved = cal.with_markers([(100, 400), (520, 410), (90, 400), (100, 100)])
+    assert moved.px_x2 == (520, 410) and not moved.orthogonal

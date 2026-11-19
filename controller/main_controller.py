@@ -16,7 +16,8 @@ from qtsocle import options_panel, settings, theme
 from ressources import app_settings
 
 from model import document, export, extraction, fit, mask, plecs
-from model.calibration import AxisCalibration, CalibrationError
+from model.calibration import (AxisCalibration, CalibrationError, orthogonal_points,
+                               to_four_points)
 from model.plecs import PlecsError
 from controller.commands import (CalibrationCommand, InsertCommand, MaskCommand,
                                  PointsCommand, points_state, same_points)
@@ -49,13 +50,13 @@ class MainController(QtCore.QObject):
         self.dirty = False
         self.graph_index = None
         self.dataset_index = None
-        self.calibration_clicks = []     # points pointés pendant la calibration
+        self.calibration_clicks = []     # points pointés pendant la calibration (bruts)
         self.drag_index = None
         self.drag_before = None          # état des points au début d'un glisser
         self.drag_text = ""
         self.drag_selected = None
         self.selected_point = None       # indice du point sélectionné de la courbe
-        self.calibration_marker = None   # repère de calibration sélectionné (0..3)
+        self.calibration_marker = None   # repère sélectionné (indice dans markers())
         self.calibration_drag = None     # repères pendant le glisser d'un repère
         self.last_paint = None
         self.mask_before = None          # masque au début d'un coup de pinceau
@@ -590,16 +591,40 @@ class MainController(QtCore.QObject):
         self.refresh_selection()
         self.view.message(self._mode_hint(mode))
 
+    # ------------------------------------------------------------ calibration : repères
+    @property
+    def orthogonal(self) -> bool:
+        """Option : repère orthonormé, 3 clics (O, X2, Y2) au lieu de 4."""
+        return bool(self.options.get("orthogonal_axes", True))
+
+    def needed_clicks(self) -> int:
+        return 3 if self.orthogonal else 4
+
+    def click_markers(self, clicks=None) -> list:
+        """Repères affichés pour les clics en cours (ramenés sur les axes en orthonormé)."""
+        clicks = self.calibration_clicks if clicks is None else clicks
+        if self.orthogonal and clicks:
+            return orthogonal_points(*clicks)
+        return list(clicks)
+
+    def show_markers(self, markers, orthogonal):
+        self.view.canvas.set_calibration_points(markers, orthogonal)
+
     def _mode_hint(self, mode: Mode) -> str:
         if mode == Mode.CALIBRATE:
-            labels = ("X1 : un point de l'axe X de valeur connue",
-                      "X2 : un autre point de l'axe X", "Y1 : un point de l'axe Y",
-                      "Y2 : un autre point de l'axe Y")
+            if self.orthogonal:
+                labels = ("O : l'origine des axes (croisement de X et Y)",
+                          "X2 : un point de l'axe X de valeur connue",
+                          "Y2 : un point de l'axe Y de valeur connue")
+            else:
+                labels = ("X1 : un point de l'axe X de valeur connue",
+                          "X2 : un autre point de l'axe X", "Y1 : un point de l'axe Y",
+                          "Y2 : un autre point de l'axe Y")
             n = len(self.calibration_clicks)
             if n == 0 and self.graph is not None and self.graph.calibrated:
                 return ("Calibration — cliquez un repère pour le déplacer (glisser ou flèches), "
                         f"ou {labels[0]} pour recommencer")
-            return (f"Calibration — cliquez {labels[min(n, 3)]} ; flèches : ajuster "
+            return (f"Calibration — cliquez {labels[min(n, len(labels) - 1)]} ; flèches : ajuster "
                     "(Maj ×10, Ctrl ×0,1) ; molette : zoom")
         return {
             Mode.NAVIGATE: "Navigation — glisser : déplacer, molette : zoom",
@@ -630,10 +655,11 @@ class MainController(QtCore.QObject):
                 return
             self.calibration_marker = None
             self.calibration_clicks.append((x, y))
-            self.view.canvas.set_calibration_points(self.calibration_clicks)
+            self.show_markers(self.click_markers(), self.orthogonal)
             self.refresh_selection()
-            if len(self.calibration_clicks) == 4:
-                self.finish_calibration(self.calibration_clicks)
+            if len(self.calibration_clicks) == self.needed_clicks():
+                clicks = self.calibration_clicks
+                self.finish_calibration(to_four_points(*clicks) if self.orthogonal else clicks)
             else:
                 self.view.message(self._mode_hint(mode))
         elif mode == Mode.ADD:
@@ -681,6 +707,7 @@ class MainController(QtCore.QObject):
             return
         self.show_coordinates(x, y)
         if not down:
+            self._preview_calibration(x, y)
             return
         mode = self.view.canvas.mode
         if mode == Mode.ADD and self.drag_index is not None and self.dataset is not None:
@@ -690,11 +717,20 @@ class MainController(QtCore.QObject):
         elif mode == Mode.CALIBRATE and self.calibration_drag is not None:
             marker, points = self.calibration_drag
             points[marker] = (x, y)
-            self.view.canvas.set_calibration_points(points)
-            self.view.canvas.set_selection((x, y))
+            orthogonal = len(points) == 3
+            shown = orthogonal_points(*points) if orthogonal else points
+            self.show_markers(shown, orthogonal)
+            self.view.canvas.set_selection(shown[marker])
         elif mode in (Mode.PAINT, Mode.ERASE) and self.last_paint is not None:
             self._paint(self.last_paint, (x, y))
             self.last_paint = (x, y)
+
+    def _preview_calibration(self, x, y):
+        """Orthonormé : le prochain repère suit la souris, déjà ramené sur son axe."""
+        if (self.view.canvas.mode != Mode.CALIBRATE or not self.orthogonal
+                or len(self.calibration_clicks) not in (1, 2)):
+            return
+        self.show_markers(self.click_markers(self.calibration_clicks + [(x, y)]), True)
 
     def canvas_released(self, x, y):
         mode = self.view.canvas.mode
@@ -763,7 +799,7 @@ class MainController(QtCore.QObject):
             if self.calibration_clicks:
                 x, y = self.calibration_clicks[-1]
                 self.calibration_clicks[-1] = (x + dx, y + dy)
-                self.view.canvas.set_calibration_points(self.calibration_clicks)
+                self.show_markers(self.click_markers(), self.orthogonal)
                 self.refresh_selection()
             elif graph.calibrated and self.calibration_marker is not None:
                 points = self.calibration_points()
@@ -808,7 +844,7 @@ class MainController(QtCore.QObject):
         point = None
         if graph is not None and canvas.mode == Mode.CALIBRATE:
             if self.calibration_clicks:
-                point = self.calibration_clicks[-1]
+                point = self.click_markers()[-1]
             elif self.calibration_marker is not None and graph.calibrated:
                 point = self.calibration_points()[self.calibration_marker]
         elif dataset is not None and self.selected_point is not None:
@@ -827,8 +863,8 @@ class MainController(QtCore.QObject):
             self._loading = False
 
     def calibration_points(self) -> list:
-        cal = self.graph.calibration
-        return [cal.px_x1, cal.px_x2, cal.px_y1, cal.px_y2]
+        """Repères de la calibration du graphique : (O, X2, Y2) ou les 4."""
+        return self.graph.calibration.markers()
 
     def _nearest_marker(self, x, y):
         graph = self.graph
@@ -844,8 +880,7 @@ class MainController(QtCore.QObject):
         graph = self.graph
         cal = graph.calibration
         try:
-            new = AxisCalibration(*points, x1=cal.x1, x2=cal.x2, y1=cal.y1, y2=cal.y2,
-                                  log_x=cal.log_x, log_y=cal.log_y)
+            new = cal.with_markers(points)
         except CalibrationError as error:
             self.view.message(f"Calibration : {error}", 5000)
             self.refresh_calibration_markers()
@@ -871,7 +906,8 @@ class MainController(QtCore.QObject):
             "x1": 0, "x2": 1, "y1": 0, "y2": 1}
         if QtWidgets.QApplication.platformName() == "offscreen":
             return                  # sans écran : les tests appellent apply_calibration
-        dialog = CalibrationDialog(previous, self.view)
+        orthogonal = np.allclose(clicks[0], clicks[2])
+        dialog = CalibrationDialog(previous, self.view, orthogonal)
         if dialog.exec():
             self.apply_calibration(clicks, dialog.values())
         else:
@@ -885,7 +921,7 @@ class MainController(QtCore.QObject):
             self.set_mode(Mode.CALIBRATE)
             return
         cal = graph.calibration
-        dialog = CalibrationDialog(cal.to_dict(), self.view)
+        dialog = CalibrationDialog(cal.to_dict(), self.view, cal.orthogonal)
         if dialog.exec():
             self.apply_calibration([cal.px_x1, cal.px_x2, cal.px_y1, cal.px_y2], dialog.values())
 
@@ -1200,10 +1236,10 @@ class MainController(QtCore.QObject):
         if graph is None:
             self.view.canvas.set_calibration_points([])
         elif self.calibration_clicks:
-            self.view.canvas.set_calibration_points(self.calibration_clicks)
+            self.show_markers(self.click_markers(), self.orthogonal)
         elif graph.calibrated:
             cal = graph.calibration
-            self.view.canvas.set_calibration_points([cal.px_x1, cal.px_x2, cal.px_y1, cal.px_y2])
+            self.show_markers(cal.markers(), cal.orthogonal)
         else:
             self.view.canvas.set_calibration_points([])
         self.refresh_selection()

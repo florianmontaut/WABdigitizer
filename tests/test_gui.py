@@ -1,6 +1,6 @@
 import json
 
-from PyQt6 import QtCore
+from PyQt6 import QtCore, QtWidgets
 
 import numpy as np
 import pytest
@@ -8,6 +8,7 @@ from qtsocle import options_panel, theme
 
 from helpers import dispose, make_controller
 from model import document
+from model.calibration import to_four_points
 from view.canvas import Mode
 
 CLICKS = [(100, 400), (500, 400), (100, 400), (100, 100)]   # X1, X2, Y1, Y2
@@ -32,11 +33,16 @@ def ctrl(tmp_path):
     dispose(controller)
 
 
+ORTHO_CLICKS = [CLICKS[0], CLICKS[1], CLICKS[3]]             # O, X2, Y2
+
+
 def calibrated(ctrl):
+    """Image + calibration par clics : 3 (repère orthonormé, défaut) ou 4 points."""
     ctrl.add_image(graph_image(), "VCE(IC)")
-    for x, y in CLICKS:
+    clicks = ORTHO_CLICKS if ctrl.orthogonal else CLICKS
+    for x, y in clicks:
         ctrl.canvas_pressed(x, y)
-    assert len(ctrl.calibration_clicks) == 4
+    assert len(ctrl.calibration_clicks) == len(clicks)
     assert ctrl.apply_calibration(CLICKS, VALUES)
     return ctrl.graph
 
@@ -422,13 +428,13 @@ def test_tab_et_suppr(ctrl):
 def test_fleches_pendant_et_apres_la_calibration(ctrl):
     ctrl.add_image(graph_image())
     px = ctrl.view.canvas.pixel_size()
-    ctrl.canvas_pressed(100 - px, 400 + px)                # X1 un pixel d'écran à côté
+    ctrl.canvas_pressed(100 - px, 400 + px)                # O un pixel d'écran à côté
     key(ctrl, QtCore.Qt.Key.Key_Right)
     key(ctrl, QtCore.Qt.Key.Key_Up)
     assert ctrl.calibration_clicks == [pytest.approx((100, 400))]
-    for x, y in CLICKS[1:]:
+    for x, y in ORTHO_CLICKS[1:]:
         ctrl.canvas_pressed(x, y)
-    assert ctrl.apply_calibration(ctrl.calibration_clicks, VALUES)
+    assert ctrl.apply_calibration(to_four_points(*ctrl.calibration_clicks), VALUES)
     graph = ctrl.graph
     stack = ctrl.undo_stack
     assert stack.undoText() == "Calibrer les axes"
@@ -523,3 +529,70 @@ def test_etat_modifie_suit_la_pile(ctrl, tmp_path):
     ctrl.load_project(path)
     assert not ctrl.dirty and ctrl.undo_stack.count() == 0
     assert not ctrl.view.actionUndo.isEnabled()
+
+
+# ---------------------------------------------------------------- repère orthonormé
+def test_calibration_en_trois_clics_ramenes_sur_les_axes(ctrl):
+    assert ctrl.orthogonal                                 # option par défaut
+    ctrl.add_image(graph_image())
+    canvas = ctrl.view.canvas
+    ctrl.canvas_pressed(100, 400)                          # O
+    ctrl.canvas_moved(480, 391, False)                     # survol : X2 suit, sur l'axe
+    assert canvas.calibration_points.data["y"].tolist() == [400, 400]
+    ctrl.canvas_pressed(500, 397)                          # X2 un peu haut
+    ctrl.canvas_moved(97, 120, False)
+    assert canvas.calibration_points.data["x"].tolist() == [100, 500, 100]
+    assert [t.toPlainText() for t in canvas.calibration_texts] == ["O", "X2", "Y2"]
+    ctrl.canvas_pressed(103, 100)                          # Y2 un peu à droite : 3e et dernier
+    assert ctrl.calibration_clicks == [(100, 400), (500, 397), (103, 100)]
+    assert ctrl.apply_calibration(to_four_points(*ctrl.calibration_clicks), VALUES)
+    cal = ctrl.graph.calibration
+    assert cal.orthogonal and cal.px_x2 == (500, 400) and cal.px_y2 == (100, 100)
+    assert cal.skew_degrees() == pytest.approx(0)
+
+
+def test_origine_deplacee_aux_fleches(ctrl):
+    graph = calibrated(ctrl)
+    ctrl.set_mode(Mode.CALIBRATE)
+    assert len(ctrl.view.canvas.calibration_texts) == 3    # O, X2, Y2
+    click(ctrl, 100.5, 400.5)                              # O
+    assert ctrl.calibration_marker == 0
+    px = ctrl.view.canvas.pixel_size()
+    key(ctrl, QtCore.Qt.Key.Key_Down, QtCore.Qt.KeyboardModifier.ShiftModifier)
+    cal = graph.calibration
+    assert cal.orthogonal
+    assert cal.px_x1 == pytest.approx((100, 400 + 10 * px))
+    assert cal.px_x2 == pytest.approx((500, 400 + 10 * px))     # axe X suit O
+    assert cal.px_y2 == pytest.approx((100, 100))
+    click(ctrl, 500, 400 + 10 * px, to=(520, 380))          # X2 glissé en biais
+    assert graph.calibration.px_x2 == pytest.approx((520, 400 + 10 * px))   # reste sur l'axe
+
+
+def test_option_quatre_points(ctrl):
+    ctrl.options["orthogonal_axes"] = False
+    graph = calibrated(ctrl)                               # 4 clics
+    assert graph.calibrated
+    ctrl.set_mode(Mode.CALIBRATE)
+    # CLICKS est exactement orthonormé (X1 = Y1...) : reconnu comme tel à l'affichage
+    assert [t.toPlainText() for t in ctrl.view.canvas.calibration_texts] == ["O", "X2", "Y2"]
+
+    ctrl.add_image(graph_image())                          # tourné : 4 points libres
+    for x, y in [(100, 400), (500, 410), (90, 400), (100, 100)]:
+        ctrl.canvas_pressed(x, y)
+    assert len(ctrl.calibration_clicks) == 4
+    assert ctrl.apply_calibration(ctrl.calibration_clicks, VALUES)
+    assert not ctrl.graph.calibration.orthogonal
+
+    # option remise : une calibration à 4 points garde ses 4 repères
+    ctrl.options["orthogonal_axes"] = True
+    ctrl.set_mode(Mode.CALIBRATE)
+    assert [t.toPlainText() for t in ctrl.view.canvas.calibration_texts] == ["X1", "X2", "Y1", "Y2"]
+
+
+def test_option_dans_les_reglages(ctrl):
+    dialog = options_panel.OptionsPannel(ctrl.schema, ctrl.options, ctrl.view)
+    assert dialog.getOptions()["orthogonal_axes"] is True
+    from view.dialogs import CalibrationDialog
+    texts = [w.text() for w in CalibrationDialog({}, ctrl.view, True).findChildren(
+        QtWidgets.QLabel)]
+    assert any("origine O" in t for t in texts)

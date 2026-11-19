@@ -32,6 +32,11 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
 - `model/` (sans Qt) :
   - `calibration.py` : `AxisCalibration`, 4 points (X1, X2, Y1, Y2) comme WPD ; affine
     dans l'espace calibré (log10 sur un axe log) : accepte une image tournée.
+    Repère orthonormé (option `orthogonal_axes`, par défaut) : 3 clics O, X2, Y2,
+    `to_four_points` -> X1 = Y1 = O, X2 à la hauteur de O, Y2 à son abscisse. Une
+    calibration est reconnue orthonormée par sa géométrie (`orthogonal`), pas par
+    l'option : ses repères (`markers()`) sont alors O, X2, Y2, déplacés sous contrainte
+    (`with_markers`) ; une calibration à 4 points garde ses 4 repères.
   - `mask.py` : pinceau (disques numpy), filtre de couleur, couleur dominante.
   - `extraction.py` : fenêtre glissante (WPD), grille de X imposée (pchip / linéaire /
     spline, dans l'espace calibré), squelette + Douglas-Peucker.

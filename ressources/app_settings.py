@@ -27,6 +27,11 @@ def schema(default_library: str) -> dict:
                                           "limits": [1, 200], "key": "brush_radius"},
                 "Tolérance couleur par défaut": {"type": "float", "default": 120.0,
                                                  "limits": [1, 442], "key": "tolerance"},
+                # axes parallèles aux bords de l'image (presque tous les graphiques) :
+                # origine O = X1 = Y1, X2 et Y2 ramenés sur les axes. Décoché : 4 points
+                # libres (image tournée, axes ne se croisant pas à l'origine)
+                "Repère orthonormé (3 points : O, X2, Y2)": {
+                    "type": "bool", "default": True, "key": "orthogonal_axes"},
             },
         },
         "Export": {

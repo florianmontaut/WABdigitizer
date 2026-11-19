@@ -29,13 +29,14 @@ def format_value(value: float) -> str:
 class CalibrationDialog(QtWidgets.QDialog):
     """Valeurs physiques des points X1, X2, Y1, Y2 et échelles logarithmiques."""
 
-    def __init__(self, values: dict, parent=None):
+    def __init__(self, values: dict, parent=None, orthogonal=False):
         super().__init__(parent)
         self.setWindowTitle("Calibration des axes")
         layout = QtWidgets.QVBoxLayout(self)
+        origin = ("X1 et Y1 : valeurs de X et de Y à l'origine O.\n" if orthogonal else "")
         layout.addWidget(QtWidgets.QLabel(
-            "Valeurs des points pointés sur l'image.\n"
-            "Accepte « 1,5 », « 2e-3 » ou « 10^-3 »."))
+            "Valeurs des points pointés sur l'image.\n" + origin
+            + "Accepte « 1,5 », « 2e-3 » ou « 10^-3 »."))
         grid = QtWidgets.QGridLayout()
         self.edits = {}
         for row, (axis, names) in enumerate((("X", ("x1", "x2")), ("Y", ("y1", "y2")))):

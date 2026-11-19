@@ -18,6 +18,31 @@ class CalibrationError(ValueError):
     """Calibration impossible (points confondus, valeurs égales, log d'une valeur <= 0)."""
 
 
+# ================================================================ repère orthonormé
+# Cas courant (axes parallèles aux bords de l'image) : trois points suffisent.
+#     O   origine, intersection des axes : X1 = Y1 = O
+#     X2  sur l'axe X : ramené à la hauteur de O
+#     Y2  sur l'axe Y : ramené à l'abscisse de O
+def orthogonal_points(origin, x_point=None, y_point=None) -> list:
+    """
+    Points pointés (O, X2, Y2), éventuellement incomplets, ramenés sur les axes :
+    [O, X2'] ou [O, X2', Y2']. Voir to_four_points pour la calibration.
+    """
+    ox, oy = (float(v) for v in origin)
+    out = [(ox, oy)]
+    if x_point is not None:
+        out.append((float(x_point[0]), oy))
+    if y_point is not None:
+        out.append((ox, float(y_point[1])))
+    return out
+
+
+def to_four_points(origin, x_point, y_point) -> list:
+    """(O, X2, Y2) -> (X1, X2, Y1, Y2) d'AxisCalibration, avec X1 = Y1 = O."""
+    o, x2, y2 = orthogonal_points(origin, x_point, y_point)
+    return [o, x2, o, y2]
+
+
 @dataclass(frozen=True)
 class AxisCalibration:
     # pixels pointés (x, y) des quatre points de référence
@@ -104,6 +129,25 @@ class AxisCalibration:
 
     def data_to_pixel(self, data) -> np.ndarray:
         return self.scaled_to_pixel(self.data_to_scaled(data))
+
+    # ------------------------------------------------------------ repères affichés
+    @property
+    def orthogonal(self) -> bool:
+        """Calibration en repère orthonormé : X1 = Y1, X2 à leur hauteur, Y2 à leur abscisse."""
+        return (np.allclose(self.px_x1, self.px_y1) and np.isclose(self.px_x2[1], self.px_x1[1])
+                and np.isclose(self.px_y2[0], self.px_x1[0]))
+
+    def markers(self) -> list:
+        """Repères à afficher et à déplacer : (O, X2, Y2) en orthonormé, sinon les 4."""
+        if self.orthogonal:
+            return [self.px_x1, self.px_x2, self.px_y2]
+        return [self.px_x1, self.px_x2, self.px_y1, self.px_y2]
+
+    def with_markers(self, markers) -> "AxisCalibration":
+        """Même calibration (valeurs, échelles) aux repères déplacés, contraintes respectées."""
+        points = to_four_points(*markers) if len(markers) == 3 else list(markers)
+        return AxisCalibration(*points, x1=self.x1, x2=self.x2, y1=self.y1, y2=self.y2,
+                               log_x=self.log_x, log_y=self.log_y)
 
     # ------------------------------------------------------------ qualité
     def skew_degrees(self) -> float:
