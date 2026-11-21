@@ -110,3 +110,23 @@ def test_corbeille(tmp_path):
     assert [e.title for e in entries] == ["FF600R12"] and errors == []
     second = library.remove(entries, tmp_path, now)                  # même seconde
     assert second.name == "2026-11-21_103000_2"
+
+
+def test_fiche_vers_composant_affichable():
+    from model import sheet
+    from model.sheet import SheetError
+    data = export.component_dict(component())
+    data["graphs"][0]["y"]["log"] = True
+    data["graphs"][0]["curves"][0]["y"][0] = 0.0                     # inaffichable en log
+    data["graphs"][0]["curves"].append({"name": "un point", "x": [5], "y": [2]})
+    data["graphs"].append({"name": "", "x": {}, "y": {}, "curves": []})
+    comp, warnings = sheet.component_from_sheet(data, "f.json")
+    assert comp.part_number == "FF600R12" and len(comp.graphs) == 2
+    graph = comp.graphs[0]
+    assert graph.calibration.log_y and graph.calibration.orthogonal
+    assert np.allclose(graph.datasets[0].data(graph.calibration), [(90, 3)])
+    assert np.allclose(graph.datasets[1].data(graph.calibration), [(5, 2)])
+    assert len(warnings) == 1 and "inaffichable" in warnings[0]
+    assert comp.graphs[1].name == "Graphique 2" and comp.graphs[1].calibrated
+    with pytest.raises(SheetError):
+        sheet.component_from_sheet({"format": "autre"})

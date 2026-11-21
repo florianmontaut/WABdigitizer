@@ -39,7 +39,8 @@ class LibraryPanel(QtWidgets.QWidget):
         table.verticalHeader().setDefaultSectionSize(22)
         table.horizontalHeader().setStretchLastSection(True)
         table.horizontalHeader().setHighlightSections(False)
-        table.setToolTip("Double-clic : ouvrir le projet du composant. "
+        table.setToolTip("Double-clic : ouvrir le projet du composant (en gris : fiche "
+                         "sans projet, ouverte en lecture seule). "
                          "Ctrl+clic / Maj+clic : plusieurs composants à comparer")
         table.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.ActionsContextMenu)
         for action in actions:

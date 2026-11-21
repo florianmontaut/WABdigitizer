@@ -99,7 +99,10 @@ réseau pour une librairie commune).
   republier après une correction met l'entrée à jour sans question, et un changement
   de catégorie la déplace.
 - **Ouvrir** (double-clic) : le projet source, pour vérifier ou corriger les relevés.
-  Une fiche seule (sans projet, en gris) n'a pas d'image : elle se compare seulement.
+  Une fiche seule (sans projet, en gris) s'ouvre en **lecture seule** : pas d'image
+  d'origine, ses courbes et modèles sont redessinés sur un fond quadrillé ; table,
+  aperçu, exports CSV et comparaison disponibles, rien n'est modifiable (titre
+  « [lecture seule] »). Une fiche s'ouvre aussi par Ouvrir un projet ou glisser-déposer.
 - **Comparer** : le comparateur s'ouvre, les courbes des composants choisis cochées
   (Ctrl+clic ou Maj+clic pour en choisir plusieurs ; caractéristique la plus partagée).
 - **Mettre à la corbeille**, **Afficher dans l'explorateur**, **Actualiser**.

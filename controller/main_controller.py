@@ -4,6 +4,7 @@ Contrôleur principal : relie la fenêtre (canevas, arborescence, paramètres, t
 document numérisé (model.document) et aux calculs (calibration, extraction, ajustement).
 """
 import dataclasses
+import json
 import pathlib
 import subprocess
 import sys
@@ -17,7 +18,7 @@ from formules import FormulaError, units
 from qtsocle import options_panel, settings, theme
 from ressources import app_settings
 
-from model import document, export, extraction, fit, library, mask, plecs
+from model import document, export, extraction, fit, library, mask, plecs, sheet
 from model.calibration import (AxisCalibration, CalibrationError, orthogonal_points,
                                to_four_points)
 from model.library import LibraryError
@@ -67,6 +68,7 @@ class MainController(QtCore.QObject):
         self._loading = False            # remplissage des paramètres en cours
         self._outside_dirty = False      # modifications hors de la pile (propriétés)
         self.compare = None              # contrôleur de la fenêtre de comparaison
+        self.read_only = False           # fiche sans projet : consultation seulement
 
         # annuler / refaire : pile parentée à la vue, actions dans la barre et le menu
         self.undo_stack = QtGui.QUndoStack(view)
@@ -157,8 +159,37 @@ class MainController(QtCore.QObject):
     def _update_title(self, *_):
         self.dirty = self._outside_dirty or not self.undo_stack.isClean()
         name = self.path.name if self.path else "sans titre"
+        if self.read_only:
+            name += " [lecture seule]"
         app = QtWidgets.QApplication.applicationName()
         self.view.setWindowTitle(f"{'* ' if self.dirty else ''}{name} — {app}")
+
+    # ------------------------------------------------------------ lecture seule
+    def _editable(self, quiet=False) -> bool:
+        """False (et un message) quand le composant ouvert est une fiche en lecture seule."""
+        if self.read_only and not quiet:
+            self.view.message("Fiche en lecture seule : rien n'est modifiable (ouvrez un "
+                              "projet, ou créez-en un nouveau)", 5000)
+        return not self.read_only
+
+    def _apply_read_only(self):
+        """Actions de modification désactivées, propriétés et table figées."""
+        view, editable = self.view, not self.read_only
+        for mode, action in view.modeActions.items():
+            action.setEnabled(editable or mode == Mode.NAVIGATE)
+        for action in (view.actionSave, view.actionSaveAs, view.actionPublish,
+                       view.actionOpenImage, view.actionPaste, view.actionClearMask,
+                       view.actionDetection, view.actionExtract, view.actionFit,
+                       view.actionAddCurve, view.actionDelete, view.actionExportPlecs):
+            action.setEnabled(editable)
+        view.parameters.setEnabled(editable)
+        view.table.setEditTriggers(
+            QtWidgets.QAbstractItemView.EditTrigger.DoubleClicked
+            | QtWidgets.QAbstractItemView.EditTrigger.EditKeyPressed
+            | QtWidgets.QAbstractItemView.EditTrigger.AnyKeyPressed if editable
+            else QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        if not editable:
+            self.set_mode(Mode.NAVIGATE)
 
     def release_history(self):
         """
@@ -257,9 +288,14 @@ class MainController(QtCore.QObject):
 
     # ============================================================ comparaison
     def current_sheet(self):
-        """Fiche du composant ouvert (courbes calibrées), None s'il n'en a pas."""
-        sheet = export.component_dict(self.component)
-        return sheet if any(g["curves"] for g in sheet["graphs"]) else None
+        """
+        Fiche du composant ouvert (courbes calibrées), None s'il n'en a pas, ou si c'est
+        une fiche ouverte en lecture seule (le comparateur la lit déjà dans son fichier).
+        """
+        if self.read_only:
+            return None
+        data = export.component_dict(self.component)
+        return data if any(g["curves"] for g in data["graphs"]) else None
 
     def open_compare(self):
         """
@@ -290,12 +326,15 @@ class MainController(QtCore.QObject):
 
     def publish(self, *_) -> bool:
         """
+        Fiche en lecture seule : refusé (rien à republier, pas d'image).
         Publie le composant ouvert : fiche, projet et description PLECS dans
         <librairie>/<Catégorie>/<Référence>. Une autre entrée de même référence est
         remplacée après confirmation (ses fichiers vont dans la corbeille de la librairie).
         Le projet ouvert devient celui de la librairie s'il n'avait pas de fichier, ou
         s'il était déjà celui de la librairie.
         """
+        if not self._editable():
+            return False
         if not any(g.calibrated and any(len(d.pixels) for d in g.datasets)
                    for g in self.component.graphs):
             self.view.error("Publier", "Aucune courbe relevée sur un graphique calibré : "
@@ -346,14 +385,11 @@ class MainController(QtCore.QObject):
             self.view.message("Choisissez un composant dans la librairie", 4000)
             return False
         entry = entries[0]
-        if entry.project_path is None:
-            self.view.error("Librairie", f"{entry.title} : fiche sans projet, pas d'image à "
-                            "rouvrir. « Comparer » affiche ses courbes.")
+        path = entry.project_path or entry.sheet_path      # fiche seule : lecture seule
+        if self._same_file(path, self.path) or not self._ask_discard():
             return False
-        if self._same_file(entry.project_path, self.path) or not self._ask_discard():
-            return False
-        self.load_project(entry.project_path)
-        return self._same_file(entry.project_path, self.path)
+        self.load_project(path)
+        return self._same_file(path, self.path)
 
     def library_compare(self, *_) -> int:
         """Comparateur ouvert sur les courbes des composants choisis."""
@@ -383,7 +419,8 @@ class MainController(QtCore.QObject):
             self.view.error("Librairie", str(error))
             self.library.reload()
             return False
-        if any(self._same_file(e.project_path, self.path) for e in entries):
+        if not self.read_only and any(self._same_file(e.project_path, self.path)
+                                      for e in entries):
             self.path = None                # le projet ouvert n'a plus de fichier
             self.set_dirty(True)
         self.library.reload()
@@ -439,9 +476,10 @@ class MainController(QtCore.QObject):
             return
         self.set_component(document.Component(), None)
 
-    def set_component(self, component, path):
+    def set_component(self, component, path, read_only=False):
         self.component = component
         self.path = pathlib.Path(path) if path else None
+        self.read_only = read_only
         self.graph_index = 0 if component.graphs else None
         self.dataset_index = 0 if component.graphs and component.graphs[0].datasets else None
         self.selected_point = None
@@ -449,6 +487,7 @@ class MainController(QtCore.QObject):
         self.calibration_clicks = []
         self.undo_stack.clear()
         self.set_dirty(False)
+        self._apply_read_only()
         self.refresh_all(reset_view=True)
 
     def _dialog_dir(self) -> str:
@@ -485,6 +524,8 @@ class MainController(QtCore.QObject):
         self.add_image(qimage_to_array(image), None, "presse-papiers")
 
     def add_image(self, array: np.ndarray, name=None, source=""):
+        if not self._editable():
+            return
         graph = self.component.add_graph(array, name, source)
         graph.datasets[0].tolerance = float(self.options["tolerance"])
         graphs = self.component.graphs
@@ -509,20 +550,50 @@ class MainController(QtCore.QObject):
             self.load_project(path)
 
     def load_project(self, path):
+        """Projet *.pdig.json, ou fiche de composant (ouverte en lecture seule)."""
         try:
-            component = document.load(path)
-        except (OSError, ValueError, KeyError) as error:
+            data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("format") == export.COMPONENT_FORMAT:
+                self.open_sheet(path, data)
+                return
+            component = document.Component.from_dict(data)
+        except (OSError, ValueError, KeyError, TypeError) as error:
             self.view.error("Ouverture", f"{path} :\n{error}")
             return
         self._remember_dir(path)
         self.set_component(component, path)
 
+    def open_sheet(self, path, data=None) -> bool:
+        """
+        Fiche sans projet, en lecture seule : graphiques redessinés sur fond quadrillé
+        (pas d'image d'origine), courbes, modèles, table, aperçu et exports.
+        """
+        try:
+            if data is None:
+                data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+            component, warnings = sheet.component_from_sheet(data, str(path))
+        except (OSError, ValueError) as error:
+            self.view.error("Ouverture", f"{path} :\n{error}")
+            return False
+        self._remember_dir(path)
+        self.set_component(component, path, read_only=True)
+        text = "Fiche ouverte en lecture seule : pas d'image d'origine, courbes sur fond quadrillé"
+        if warnings:
+            self.view.error("Ouverture", text + "\n\nÀ vérifier :\n- " + "\n- ".join(warnings))
+        else:
+            self.view.message(text, 8000)
+        return True
+
     def save_project(self) -> bool:
+        if not self._editable():
+            return False
         if self.path is None:
             return self.save_project_as()
         return self.write_project(self.path)
 
     def save_project_as(self) -> bool:
+        if not self._editable():
+            return False
         default = self.path or pathlib.Path(self._dialog_dir()) / (
             (self.component.part_number or self.component.name or "composant")
             + document.PROJECT_SUFFIX)
@@ -695,10 +766,13 @@ class MainController(QtCore.QObject):
             return
         dataset = self.component.graphs[g].datasets[d]
         dataset.visible = item.checkState() == QtCore.Qt.CheckState.Checked
-        self.set_dirty()
+        if not self.read_only:          # affichage seulement : la fiche reste intacte
+            self.set_dirty()
         self.refresh_curves()
 
     def add_dataset(self):
+        if not self._editable():
+            return
         graph = self.graph
         if graph is None:
             return
@@ -710,6 +784,8 @@ class MainController(QtCore.QObject):
             self.set_mode(Mode.ADD)
 
     def delete_selection(self):
+        if not self._editable():
+            return
         if self.graph is None:
             return
         graph = self.graph
@@ -725,6 +801,9 @@ class MainController(QtCore.QObject):
         self.set_mode(action.data())
 
     def set_mode(self, mode: Mode):
+        refused = self.read_only and mode != Mode.NAVIGATE
+        if refused:
+            mode = Mode.NAVIGATE
         self.view.modeActions[mode].setChecked(True)
         self.view.canvas.set_mode(mode)
         self.drag_index = None
@@ -734,6 +813,8 @@ class MainController(QtCore.QObject):
             self.refresh_calibration_markers()
         self.refresh_selection()
         self.view.message(self._mode_hint(mode))
+        if refused:
+            self._editable()            # message : lecture seule
 
     # ------------------------------------------------------------ calibration : repères
     @property
@@ -786,7 +867,7 @@ class MainController(QtCore.QObject):
 
     def canvas_pressed(self, x, y):
         graph = self.graph
-        if graph is None:
+        if graph is None or not self._editable(quiet=True):
             return
         mode = self.view.canvas.mode
         if mode == Mode.CALIBRATE:
@@ -877,6 +958,8 @@ class MainController(QtCore.QObject):
         self.show_markers(self.click_markers(self.calibration_clicks + [(x, y)]), True)
 
     def canvas_released(self, x, y):
+        if not self._editable(quiet=True):
+            return
         mode = self.view.canvas.mode
         if mode == Mode.ADD and self.drag_index is not None:
             dataset, graph = self.dataset, self.graph
@@ -936,7 +1019,7 @@ class MainController(QtCore.QObject):
     def nudge(self, dx, dy):
         """Flèches : repère de calibration ou point sélectionné, appuis fusionnés."""
         graph = self.graph
-        if graph is None:
+        if graph is None or not self._editable(quiet=True):
             return
         mode = self.view.canvas.mode
         if mode == Mode.CALIBRATE:
@@ -966,6 +1049,8 @@ class MainController(QtCore.QObject):
         if dataset is None or not len(dataset):
             return
         if command == "delete":
+            if not self._editable():
+                return
             if self.selected_point is not None and self.selected_point < len(dataset):
                 self.delete_point(self.selected_point)
             return
@@ -1060,6 +1145,8 @@ class MainController(QtCore.QObject):
             self.set_mode(Mode.NAVIGATE)
 
     def edit_axis_values(self):
+        if not self._editable():
+            return
         graph = self.graph
         if graph is None or not graph.calibrated:
             self.set_mode(Mode.CALIBRATE)
@@ -1101,6 +1188,8 @@ class MainController(QtCore.QObject):
 
     # ============================================================ masque, extraction
     def clear_mask(self):
+        if not self._editable():
+            return
         dataset = self.dataset
         if dataset is None or dataset.mask is None or not dataset.mask.any():
             return
@@ -1123,6 +1212,8 @@ class MainController(QtCore.QObject):
         self.view.canvas.set_detection(self.foreground())
 
     def extract(self):
+        if not self._editable():
+            return
         graph = self.graph
         if graph is None or graph.image is None:
             return
@@ -1152,6 +1243,8 @@ class MainController(QtCore.QObject):
 
     # ============================================================ modèle
     def fit_model(self):
+        if not self._editable():
+            return
         graph, dataset = self.graph, self.dataset
         if dataset is None or not self._need_calibration():
             return
@@ -1314,7 +1407,7 @@ class MainController(QtCore.QObject):
 
     # ============================================================ table
     def table_cell_changed(self, row, column):
-        if self._loading or self.dataset is None:
+        if self._loading or self.dataset is None or not self._editable():
             return
         graph, dataset = self.graph, self.dataset
         data = dataset.data(graph.calibration)

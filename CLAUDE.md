@@ -57,6 +57,9 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     lues sans décoder les images, erreurs et références en double signalées), `target`,
     `conflicts`, `publish`, `remove` (vers `_corbeille/<date>/`, jamais de suppression).
     Repris de CoolingTool (`model/library.py`), en écriture.
+  - `sheet.py` : fiche -> `Component` affichable (lecture seule d'une fiche sans projet) :
+    image blanche quadrillée (900 × 600) et calibration orthonormée couvrant les données
+    (log10 sur un axe log) ; points inaffichables écartés et signalés ; modèles repris.
   - `compare.py` : comparaison entre composants de tous types. Courbes regroupées par
     dimensions physiques (X, Y) de leurs unités (`formules.units`), sinon par noms des
     grandeurs ; `Frame` : unités communes (celles de la première courbe) ; valeurs au
@@ -97,6 +100,12 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   vues, slots en méthodes liées ; `view.close_guard` est une `weakref.WeakMethod`.
 - Toute modification des points, de la calibration, du masque ou de la structure passe
   par une commande de la pile (`MainController.push`, `change_points`).
+- Lecture seule (`MainController.read_only`, fiche ouverte par `open_sheet`, aussi via
+  `load_project` qui reconnaît le format) : `_apply_read_only` désactive les actions de
+  modification, les propriétés et l'édition de la table ; chaque point d'entrée qui
+  modifie appelle `_editable()`. Rien ne passe par la pile, rien ne marque le projet
+  modifié (la visibilité des courbes reste libre). `current_sheet` rend None : le
+  comparateur lit déjà la fiche dans la librairie.
 - Librairie : le projet ouvert devient celui de la librairie à la publication s'il
   n'avait pas de fichier ou s'il en venait déjà (republier = mise à jour en place, sans
   question) ; une autre entrée de même référence n'est remplacée qu'après confirmation,
@@ -107,7 +116,8 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
 ## Non fait / pistes
 
 - Comparaison : grandeurs dérivées (pertes P = v·i, mise en parallèle de n composants).
-- Librairie : ouverture en lecture seule d'une fiche sans projet ; librairie livrée avec
+- Lecture seule : pas de conversion d'une fiche en projet (il faudrait l'image d'origine).
+- Librairie : librairie livrée avec
   l'exécutable ; suivi des changements du dossier partagé (bouton Actualiser seulement) ;
   vidage de la corbeille (à la main). Jamais essayée sur un vrai partage réseau.
 

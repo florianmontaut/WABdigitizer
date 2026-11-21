@@ -679,20 +679,11 @@ def test_ouvrir_comparer_supprimer(ctrl, tmp_path):
     assert len(ctrl.compare.selected) == 2
     assert ctrl.library_reveal() == ctrl.library.selected()[0].sheet_path
 
-    # fiche seule (sans projet) : listée, pas ouvrable
-    from model import export as export_
-    sheet = json.loads((folder / "IGBT" / "A1.json").read_text("utf-8"))
-    sheet["part_number"] = "C3"
-    export_.write_text(folder / "C3.json", json.dumps(sheet))
-    ctrl.library.reload()
-    ctrl.library.select_keys([e.key for e in ctrl.library.entries.values() if e.title == "C3"])
-    assert not ctrl.library_open() and "fiche sans projet" in ctrl.view.last_error
-
     # corbeille : le projet ouvert (A1) n'a plus de fichier
     ctrl.library.select_keys([e.key for e in ctrl.library.entries.values() if e.title == "A1"])
     assert ctrl.library_remove()
     assert ctrl.path is None and ctrl.dirty
-    assert sorted(library_rows(ctrl)) == ["B2", "C3"]
+    assert library_rows(ctrl) == ["B2"]
     assert ctrl.library.selected() == []
 
 
@@ -707,3 +698,64 @@ def test_changer_de_librairie(ctrl, tmp_path):
     assert library_rows(ctrl) == ["FF600R12"]                  # filtre sur la catégorie
     ctrl.view.library.filter.setText("mosfet")
     assert library_rows(ctrl) == []
+
+
+def test_fiche_sans_projet_en_lecture_seule(ctrl, tmp_path):
+    folder = tmp_path / "library"
+    digitized(ctrl, "A1")
+    assert ctrl.publish()
+    ctrl.fit_model()                                           # modèle gardé dans la fiche
+    assert ctrl.publish()
+    (folder / "IGBT" / "A1.pdig.json").unlink()                # projet perdu : fiche seule
+    ctrl.new_component()
+    ctrl.library.reload()
+    ctrl.library.select_keys(list(ctrl.library.entries))
+    assert ctrl.library_open()
+    assert ctrl.read_only and "[lecture seule]" in ctrl.view.windowTitle()
+    graph = ctrl.graph
+    assert graph.calibrated and graph.image.shape == (600, 900, 3)
+    assert np.allclose(graph.datasets[0].data(graph.calibration), [(0, 0), (10, 30)])
+    assert graph.datasets[0].fit is not None
+    assert ctrl.view.table.rowCount() == 2
+
+    # rien n'est modifiable, rien ne marque le projet modifié
+    view = ctrl.view
+    assert not view.actionSave.isEnabled() and not view.actionPublish.isEnabled()
+    assert not view.modeActions[Mode.ADD].isEnabled() and not view.parameters.isEnabled()
+    ctrl.set_mode(Mode.ADD)
+    assert view.canvas.mode == Mode.NAVIGATE and "lecture seule" in view.statusBar().currentMessage()
+    ctrl.canvas_pressed(300, 300)
+    ctrl.selected_point = 0
+    ctrl.nudge(5, 5)
+    ctrl.key_command("delete")
+    ctrl.add_dataset()
+    ctrl.delete_selection()
+    assert not ctrl.save_project() and not ctrl.publish()
+    assert len(graph.datasets) == 1 and len(graph.datasets[0]) == 2
+    assert ctrl.undo_stack.count() == 0 and not ctrl.dirty
+    ctrl.view.tree.model().item(0).child(0).setCheckState(QtCore.Qt.CheckState.Unchecked)
+    assert not graph.datasets[0].visible and not ctrl.dirty
+
+    # exports et comparaison : la fiche n'est comptée qu'une fois
+    csv = tmp_path / "c.csv"
+    ctrl._save_name = lambda *args: str(csv)
+    ctrl.export_csv()
+    assert len(csv.read_text("utf-8").splitlines()) == 3      # en-tête + 2 points
+    assert ctrl.current_sheet() is None
+    assert ctrl.library_compare() == 1
+
+    # nouveau composant : modifiable de nouveau
+    ctrl.new_component()
+    assert not ctrl.read_only and view.actionSave.isEnabled() and view.parameters.isEnabled()
+
+
+def test_fiche_ouverte_comme_un_fichier(ctrl, tmp_path):
+    digitized(ctrl, "A1")
+    path = tmp_path / "a1.json"
+    from model import export as export_
+    export_.write_component(ctrl.component, path)
+    ctrl.new_component()
+    ctrl.open_files([str(path)])                               # glisser-déposer
+    assert ctrl.read_only and ctrl.component.part_number == "A1"
+    ctrl.load_project(tmp_path / "library" / "absent.json")
+    assert "absent.json" in ctrl.view.last_error and ctrl.read_only
