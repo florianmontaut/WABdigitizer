@@ -117,6 +117,7 @@ class MainController(QtCore.QObject):
         view.actionExtract.triggered.connect(self.extract)
         view.actionFit.triggered.connect(self.fit_model)
         view.actionAddCurve.triggered.connect(self.add_dataset)
+        view.actionSplit.triggered.connect(self.split_points)
         view.actionDelete.triggered.connect(self.delete_selection)
         view.actionOptions.triggered.connect(self.edit_options)
         view.actionDark.toggled.connect(self.set_dark_mode)
@@ -186,7 +187,8 @@ class MainController(QtCore.QObject):
         for action in (view.actionSave, view.actionSaveAs, view.actionPublish,
                        view.actionOpenImage, view.actionPaste, view.actionClearMask,
                        view.actionDetection, view.actionExtract, view.actionFit,
-                       view.actionAddCurve, view.actionDelete, view.actionExportPlecs):
+                       view.actionAddCurve, view.actionSplit, view.actionDelete,
+                       view.actionExportPlecs):
             action.setEnabled(editable)
         view.parameters.setEnabled(editable)
         view.table.setEditTriggers(
@@ -1260,6 +1262,54 @@ class MainController(QtCore.QObject):
         dataset.mask[...] = False
         self.push(MaskCommand(self, self.graph, dataset, before, dataset.mask,
                               "Effacer le masque"))
+
+    def split_points(self, *_) -> bool:
+        """
+        Points de la courbe choisie situés dans son masque (peint au pinceau) -> nouvelle
+        courbe, placée juste après ; le masque est effacé. Pour séparer deux courbes
+        relevées comme une seule (import PDF, extraction). Une seule étape d'annulation.
+        """
+        if not self._editable():
+            return False
+        graph, dataset = self.graph, self.dataset
+        if dataset is None or not len(dataset):
+            self.view.message("Choisissez une courbe qui a des points", 5000)
+            return False
+        if dataset.mask is None or not dataset.mask.any():
+            self.view.message(f"Peignez d'abord au pinceau (B) les points à séparer de "
+                              f"« {dataset.name} »", 6000)
+            self.set_mode(Mode.PAINT)
+            return False
+        rows, cols = dataset.mask.shape
+        px = np.clip(np.round(dataset.pixels).astype(int), 0, [cols - 1, rows - 1])
+        inside = dataset.mask[px[:, 1], px[:, 0]]
+        if not inside.any() or inside.all():
+            self.view.message("Le masque doit couvrir une partie des points de la courbe, "
+                              "pas aucun ni tous", 6000)
+            return False
+        used = {d.name for d in graph.datasets}
+        name, n = f"{dataset.name} (2)", 2
+        while name in used:
+            n += 1
+            name = f"{dataset.name} ({n})"
+        new = document.Dataset(name=name,
+                               color=document.PALETTE[len(graph.datasets) % len(document.PALETTE)],
+                               pixels=dataset.pixels[inside].copy())
+        new.tolerance, new.curve_color = dataset.tolerance, dataset.curve_color
+        keep = ~inside
+        text = f"Séparer {int(inside.sum())} point(s) de « {dataset.name} »"
+        self.undo_stack.beginMacro(text)
+        try:
+            self.change_points(text, lambda d: setattr(d, "pixels", d.pixels[keep]))
+            before = dataset.mask.copy()
+            dataset.mask[...] = False
+            self.push(MaskCommand(self, graph, dataset, before, dataset.mask, "Effacer le masque"))
+            index = graph.datasets.index(dataset) + 1
+            self.push(InsertCommand(self, graph.datasets, index, new, True, text, graph=graph))
+        finally:
+            self.undo_stack.endMacro()
+        self.view.message(f"{text} : nouvelle courbe « {name} »", 6000)
+        return True
 
     def foreground(self):
         dataset = self.dataset

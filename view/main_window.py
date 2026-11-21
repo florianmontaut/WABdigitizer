@@ -112,6 +112,9 @@ class MainWindow(QtWidgets.QMainWindow):
                                "Extraction automatique dans le masque (Ctrl+E)", "Ctrl+E")
         self.actionFit = a("Ajuster le modèle", "fit", shortcut="Ctrl+M")
         self.actionAddCurve = a("Nouvelle courbe", "curve_add", shortcut="Ctrl+K")
+        self.actionSplit = a("Séparer les points du masque", "split",
+                             "Points de la courbe peints au pinceau -> nouvelle courbe "
+                             "(deux courbes relevées comme une seule)", "Ctrl+Shift+X")
         self.actionDelete = a("Supprimer la sélection", "trash",
                               "Supprimer le graphique ou la courbe sélectionné")
         self.actionOptions = a("Options...", "settings", "Options de l'application")
@@ -147,7 +150,7 @@ class MainWindow(QtWidgets.QMainWindow):
             bar.addAction(act)
         bar.addSeparator()
         for act in (self.actionClearMask, self.actionDetection, self.actionExtract,
-                    self.actionFit, self.actionAddCurve):
+                    self.actionFit, self.actionAddCurve, self.actionSplit):
             bar.addAction(act)
         bar = self.addToolBar("Application")
         bar.setMovable(False)
@@ -174,7 +177,7 @@ class MainWindow(QtWidgets.QMainWindow):
             menu.addAction(act)
         menu.addSeparator()
         for act in (self.actionClearMask, self.actionDetection, self.actionExtract,
-                    self.actionFit, self.actionAddCurve, self.actionDelete):
+                    self.actionFit, self.actionAddCurve, self.actionSplit, self.actionDelete):
             menu.addAction(act)
         menu = self.menuBar().addMenu("&Librairie")
         self.actionLibraryPanel = self.library_dock.toggleViewAction()

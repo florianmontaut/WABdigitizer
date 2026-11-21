@@ -120,3 +120,27 @@ def test_textes_et_nombres():
     assert pdfimport.clean(chr(0xF0B0)) == "°" and pdfimport.clean("(cid:2)") == "¤"
     fit = pdfimport.fit_axis([(0.0, 1.0, "1"), (10.0, 10.0, "10"), (20.0, 100.0, "100")])
     assert fit.log and fit.residual < 1e-9 and np.isclose(fit.value(15.0), 10 ** 1.5)
+
+
+def test_courbes_en_double_et_point_commun(tmp_path):
+    """Tracé répété (une seule courbe) ; courbes issues d'un même coin : pas recollées."""
+    import matplotlib.pyplot as plt
+    with matplotlib.rc_context({"pdf.fonttype": 42, "path.simplify": False}):
+        fig = plt.figure(figsize=(8.27, 6))
+        a = fig.add_axes([0.15, 0.2, 0.45, 0.5])          # cadre < 35 % de la page
+        v = np.linspace(-4.0, 0.0, 12)
+        for k in range(3):                             # trois courbes depuis (0, 0)
+            a.plot(v, (k + 1) * 10 * v, "k-", lw=1)
+        a.plot(v, 10 * v, "k-", lw=1)                   # la première, dessinée deux fois
+        a.plot(v[::-1][:6], 5 * v[::-1][:6], "k-", lw=1)  # finit au coin (0, 0)... à l'envers
+        a.set_xlim(-4, 0)
+        a.set_ylim(-120, 0)
+        a.grid(True)
+        a.set_xlabel("VDS [V]")
+        a.set_ylabel("ID [A]")
+        fig.savefig(tmp_path / "coin.pdf")
+        plt.close(fig)
+    (graph,) = pdfimport.analyse(tmp_path / "coin.pdf")
+    assert len(graph.curves) == 4
+    for curve in graph.curves:                          # aucune courbe ne revient en arrière
+        assert np.all(np.diff(curve.points[:, 0]) > 0)

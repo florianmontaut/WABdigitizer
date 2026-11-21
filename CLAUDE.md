@@ -67,7 +67,9 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     (`flatten`, blocs de dessin parcourus, glyphes dessinés −/Ω remis en texte), cadres
     par composantes connexes de traits H/V (`find_frames`), texte rattaché au cadre le
     plus proche, graduations (`tick_labels`, `fit_axis` lin/log, résidu en points),
-    titres d'axes, courbes (`join_fragments` : bouts, puis tirets), étiquettes (légende
+    titres d'axes, courbes (`join_fragments` : tracés répétés retirés, bouts raccordés
+    seulement là où deux bouts exactement se touchent et sans demi-tour, puis tirets ;
+    `drop_duplicates` : courbe couverte par une autre), étiquettes (légende
     par couleur / pointillé / épaisseur, sinon texte le plus proche), légendes de
     figures numérotées (`_match_captions` : toutes dessus ou toutes dessous).
     `to_component` : image recadrée (pypdfium2, 200 dpi), calibration orthonormée sur
@@ -96,7 +98,8 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   l'image = coordonnées de la vue ; émet pressed / moved / released en pixels),
   `main_window.py`, `properties.py` (groupes du ParameterTree), `dialogs.py`.
 - `controller/main_controller.py` : modes du canevas, calibration, édition, extraction,
-  modèle, fichiers, exports.
+  modèle, fichiers, exports. `split_points` : points de la courbe dans son masque ->
+  nouvelle courbe (macro de la pile : points, masque effacé, insertion).
 - `controller/commands.py` : annuler / refaire (`QUndoStack` du contrôleur, mécanisme de
   GLviewer, sans son code). Commandes par instantanés avant / après, objets désignés par
   référence : `PointsCommand` (points + modèle ; flèches fusionnées par `mergeWith`),

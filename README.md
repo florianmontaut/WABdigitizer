@@ -31,6 +31,9 @@ python -m pytest tests
    - ou automatiquement : pinceau (`B`) le long de la courbe, pipette (`P`) sur la courbe
      (ou « Couleur dominante du masque »), puis **Extraire** (`Ctrl+E`). L'œil affiche
      les pixels retenus.
+   - deux courbes relevées comme une seule (allers-retours en dents de scie) : peindre au
+     pinceau les points de l'une, puis **Séparer les points du masque** (`Ctrl+Shift+X`) :
+     ils forment une nouvelle courbe (une seule étape d'annulation).
 4. **Condition** de la courbe (« Tj = 125 °C ») et unités des axes dans le panneau de droite.
 5. **Modèle** (`Ctrl+M`) : formule de x (`a*x^b`, `v0 + r*x + k*x^b`...) ajustée sur les
    points ; courbe du modèle en pointillés sur l'image pour vérification.
@@ -75,7 +78,7 @@ importer. Les conditions lues et la liste « À vérifier » vont dans les notes
   log), ajustement sur toutes les graduations ; repères posés sur les graduations
   extrêmes.
 - **Courbes** : sommets exacts du PDF (pas de rééchantillonnage), morceaux et pointillés
-  recollés. Nom et condition : étiquette posée près de la courbe, ou entrée de légende
+  recollés (jamais à un point où partent plusieurs courbes) ; tracés en double écartés. Nom et condition : étiquette posée près de la courbe, ou entrée de légende
   rapprochée par la couleur, le pointillé, l'épaisseur. Température lue (« Tj = 25 °C »).
 - **Titres d'axes** (grandeur et unité) et **légende de la figure** (« Figure 7. ... »)
   pour le nom du graphique ; conditions lues et avertissements dans les notes du

@@ -815,3 +815,30 @@ def test_dialogue_d_import_pdf(tmp_path):
     assert "Eon" in dialog.details.toPlainText() and not dialog.preview.pixmap().isNull()
     dialog.deleteLater()
     app.processEvents()
+
+
+def test_separer_les_points_du_masque(ctrl):
+    graph = calibrated(ctrl)
+    dataset = ctrl.dataset
+    zigzag = np.array([(150 + 20 * i, 300 if i % 2 else 200) for i in range(10)], float)
+    dataset.pixels = zigzag.copy()
+    assert not ctrl.split_points()                       # pas de masque : pinceau proposé
+    assert ctrl.view.canvas.mode == Mode.PAINT
+    mask = graph.mask_of(dataset)
+    mask[290:311, :] = True                              # la courbe du bas
+    count = ctrl.undo_stack.count()
+    assert ctrl.split_points()
+    assert ctrl.undo_stack.count() == count + 1          # une seule étape
+    first, second = graph.datasets
+    assert np.allclose(first.pixels[:, 1], 200) and len(first) == 5
+    assert np.allclose(second.pixels[:, 1], 300) and len(second) == 5
+    assert second.name == f"{first.name} (2)" and not first.mask.any()
+    assert ctrl.dataset is second
+    ctrl.undo_stack.undo()
+    assert len(graph.datasets) == 1 and len(dataset) == 10 and dataset.mask.any()
+    ctrl.undo_stack.redo()
+    assert len(graph.datasets) == 2 and len(graph.datasets[0]) == 5
+    # masque sur tous les points : refusé
+    ctrl.select(0, 1)
+    graph.mask_of(ctrl.dataset)[:, :] = True
+    assert not ctrl.split_points() and len(graph.datasets) == 2

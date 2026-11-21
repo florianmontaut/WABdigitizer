@@ -497,7 +497,13 @@ def join_fragments(raw, tol=0.6, straight=False) -> list:
     pointillé dessiné tiret par tiret (trou court, même direction) ; le motif (tiret /
     trou) devient alors le style « dash » de la courbe.
     """
-    curves = _join_ends([dict(c) for c in raw], tol)
+    seen, unique = set(), []
+    for c in raw:                         # tracé dessiné deux fois : une seule fois
+        key = (c["color"], c["width"], c["dash"], tuple(np.round(c["pts"], 1).ravel()))
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+    curves = _join_ends([dict(c) for c in unique], tol)
     for c in curves:                      # sens de lecture : x croissant
         if c["pts"][0][0] > c["pts"][-1][0]:
             c["pts"] = c["pts"][::-1]
@@ -556,6 +562,23 @@ def join_fragments(raw, tol=0.6, straight=False) -> list:
     return out
 
 
+def drop_duplicates(curves, tol=0.4) -> tuple:
+    """
+    Courbes en double (tracé répété, ou morceau déjà couvert par une autre courbe) :
+    une courbe dont tous les points sont à moins de tol d'une autre, plus longue ou
+    égale, est écartée. Rend (courbes gardées, nombre écarté).
+    """
+    order = sorted(range(len(curves)), key=lambda i: -len(curves[i]["pts"]))
+    kept = []
+    for i in order:
+        pts = curves[i]["pts"]
+        if any(all(dist_to_polyline(p, curves[k]["pts"]) < tol for p in pts) for k in kept):
+            continue
+        kept.append(i)
+    kept.sort()
+    return [curves[i] for i in kept], len(curves) - len(kept)
+
+
 def _join_ends(curves, tol) -> list:
     """Morceaux de même style bout à bout (extrémités à moins de tol) : chaînés."""
     out = []
@@ -569,29 +592,28 @@ def _join_ends(curves, tol) -> list:
                 x, y = c["pts"][end]
                 cells.setdefault((int(x // tol), int(y // tol)), []).append((i, end))
 
-        def match(point, used, want, me):
+        def match(point, used, me):
             """
-            Morceau libre qui touche point : seul autre bout en ce point (dans n'importe
-            quel sens), sinon celui dont le bout « want » (0 début, -1 fin) y est.
+            Morceau libre qui touche point, s'il est le seul autre bout en ce point. Un
+            point où se rejoignent plus de deux bouts (origine, coin du cadre où partent
+            plusieurs courbes) n'est jamais un raccord : courbes distinctes.
             """
             cx, cy = int(point[0] // tol), int(point[1] // tol)
             near = [(i, end) for dx in (-1, 0, 1) for dy in (-1, 0, 1)
                     for i, end in cells.get((cx + dx, cy + dy), ())
                     if i not in me and np.hypot(*(group[i]["pts"][end] - point)) < tol]
-            if len(near) == 1:
-                return near[0] if near[0][0] not in used else None
-            return next(((i, end) for i, end in near if end == want and i not in used), None)
+            if len(near) == 1 and near[0][0] not in used:
+                return near[0]
+            return None
         used = set()
         for i, c in enumerate(group):
             if i in used:
                 continue
             used.add(i)
             pts, chain = c["pts"], {i}
-            # deux courbes qui partent d'un même point (origine) ne sont pas recollées :
-            # à un point partagé par plus de deux bouts, seulement fin -> début
             for forward in (True, False):
                 while True:
-                    m = match(pts[-1], used, 0, chain) if forward else match(pts[0], used, -1, chain)
+                    m = match(pts[-1] if forward else pts[0], used, chain)
                     if m is None:
                         break
                     j, end = m
@@ -740,7 +762,9 @@ def _analyse_frame(info, chars, strokes, page_no):
             continue
         raw.append(dict(pts=np.clip(p.pts[inside], [x0, y0], [x1, y1]), color=p.color,
                         width=p.width, dash=p.dash, label=""))
-    curves = join_fragments(raw)
+    curves, doubles = drop_duplicates(join_fragments(raw))
+    if doubles:
+        notes.append(f"{doubles} tracé(s) en double écarté(s)")
     samples = join_fragments(samples, straight=True)
     sizes = Counter((round(b[2] - b[0]), round(b[3] - b[1])) for b in boxes)
     boxes = [b for b in boxes if sizes[(round(b[2] - b[0]), round(b[3] - b[1]))] < 4]  # pas la grille
