@@ -17,9 +17,20 @@ LOSSES = {"Eon": 0.02 * I + 1e-4 * I ** 2, "Eoff": 0.5 + 0.03 * I}
 
 
 def datasheet(path):
-    """Une page : sortie (étiquettes dans le tracé) et pertes (axe log, légende par style)."""
+    """
+    Page 1 : titre (référence, catégorie, fabricant). Page 2 : sortie (étiquettes dans le
+    tracé) et pertes (axe log, légende par style, conditions sous la légende).
+    """
     import matplotlib.pyplot as plt
-    with matplotlib.rc_context({"pdf.fonttype": 42, "path.simplify": False}):
+    from matplotlib.backends.backend_pdf import PdfPages
+    style = {"pdf.fonttype": 42, "path.simplify": False}
+    with matplotlib.rc_context(style), PdfPages(path) as pages:
+        title = plt.figure(figsize=(8.27, 11.7))
+        title.text(0.1, 0.9, "ESSAI120M4", fontsize=22)
+        title.text(0.1, 0.86, "1200 V SiC power MOSFET", fontsize=14)
+        title.text(0.1, 0.05, "www.infineon.com", fontsize=8)
+        pages.savefig(title)
+        plt.close(title)
         fig, (a, b) = plt.subplots(1, 2, figsize=(8.27, 4.5))
         fig.subplots_adjust(left=0.1, right=0.97, bottom=0.25, top=0.95, wspace=0.35)
         for label, y in CURVES.items():
@@ -40,7 +51,8 @@ def datasheet(path):
         b.set_ylabel("E [mJ]")
         fig.text(0.1, 0.08, "Figure 1. Typical output characteristics", fontsize=10)
         fig.text(0.58, 0.08, "Figure 2. Switching losses", fontsize=10)
-        fig.savefig(path)
+        fig.text(0.58, 0.035, "VCE = 600 V, Tj = 150 °C", fontsize=8)
+        pages.savefig(fig)
         plt.close(fig)
     return path
 
@@ -75,24 +87,35 @@ def test_lecture_des_graphiques(pdf):
 
 def test_composant_brouillon(pdf):
     component, warnings = pdfimport.import_pdf(pdf, dpi=150)
-    assert component.name == "essai" and len(component.graphs) == 2
-    assert "Importé de essai.pdf" in component.notes
-    out, loss = component.graphs
-    assert out.name.startswith("Figure 1.") and out.source == "essai.pdf p.1"
+    # identité lue en première page
+    identity = (component.part_number, component.manufacturer, component.category)
+    assert identity == ("ESSAI120M4", "Infineon", "MOSFET")
+    assert component.name == "essai" and "Importé de essai.pdf" in component.notes
+    assert "1200 V SiC power MOSFET" in component.notes
+    # Eon et Eoff d'un même graphique : deux graphiques, un rôle PLECS chacun
+    out, eon, eoff = component.graphs
+    assert out.name.startswith("Figure 1.") and out.source == "essai.pdf p.2"
+    assert eon.name.endswith("Eon") and eoff.name.endswith("Eoff") and eon.image is eoff.image
+    assert [g.plecs_role for g in component.graphs] == ["conduction", "turn_on", "turn_off"]
     assert (out.x_axis.quantity, out.x_axis.unit) == ("VCE", "V")
-    assert (loss.y_axis.quantity, loss.y_axis.unit) == ("E", "mJ")
-    assert out.calibration.orthogonal and loss.calibration.log_y
+    assert (eon.y_axis.quantity, eon.y_axis.unit) == ("Eon", "mJ")
+    assert out.calibration.orthogonal and eon.calibration.log_y
     assert out.image.ndim == 3 and out.image.dtype == np.uint8
-    # pixels de l'image recadrée -> valeurs d'origine
+    # pixels de l'image recadrée -> valeurs d'origine ; conditions complétées
     for dataset in out.datasets:
         data = dataset.data(out.calibration)
         assert np.allclose(data[:, 1], CURVES[dataset.name], rtol=2e-3, atol=0.5)
         assert dataset.temperature in (25.0, 150.0) and dataset.condition == dataset.name
-    eon = next(d for d in loss.datasets if d.name == "Eon")
-    assert np.allclose(eon.data(loss.calibration)[:, 1], LOSSES["Eon"], rtol=2e-3)
+    (on,) = eon.datasets
+    assert np.allclose(on.data(eon.calibration)[:, 1], LOSSES["Eon"], rtol=2e-3)
+    assert on.condition == "Eon, VCE = 600 V, Tj = 150 °C" and on.temperature == 150.0
+    # export PLECS direct : conduction lue sur IC(VCE) (axes échangés), énergies à 600 V
+    from model import plecs
+    xml, _ = plecs.build(component)
+    assert "ConductionLoss" in xml and "TurnOnLoss" in xml and "TurnOffLoss" in xml
     # le composant s'enregistre comme un projet
     data = document.Component.from_dict(component.to_dict())
-    assert len(data.graphs[1].datasets) == 2
+    assert len(data.graphs[1].datasets) == 1 and data.graphs[0].plecs_role == "conduction"
 
 
 def test_sans_graphique_ou_illisible(tmp_path):

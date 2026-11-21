@@ -582,48 +582,52 @@ class MainController(QtCore.QObject):
         if path:
             self.import_pdf(path, ask=False)
 
-    def import_pdf(self, path, choose=None, ask=True) -> bool:
+    def import_pdf(self, path, choose=None, ask=True, part=None) -> bool:
         """
         Datasheet PDF vectorielle -> nouveau composant (sans fichier, à enregistrer) :
-        graphiques trouvés, choisis dans PdfImportDialog (sans écran, ou choose donné :
-        ces indices, sinon tous), calibrés, courbes relevées. Avertissements dans les notes
-        du composant.
+        graphiques trouvés et interprétés (identité, conditions, rôles PLECS), choisis
+        dans PdfImportDialog ; sans écran, ou choose donné : ces indices, sinon ceux de la
+        partie (module IGBT + diode : « IGBT » par défaut, ou « Diode »). Avertissements
+        dans les notes du composant.
         """
         if ask and not self._ask_discard():
             return False
         path = pathlib.Path(path)
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
         try:
-            found = pdfimport.analyse(path)
-            component, _ = pdfimport.to_component(path, found) if found else (None, [])
+            draft = pdfimport.prepare(path)
         except pdfimport.PdfImportError as error:
-            self.view.error("Import PDF", str(error))
+            text = str(error)
+            if "aucun graphique" in text:
+                text += (". Capturez les graphiques (Ctrl+V) ou ajoutez-les comme images "
+                         "(Ctrl+I).")
+            self.view.error("Import PDF", text)
             return False
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
         self._remember_dir(path)
-        if not found:
-            self.view.error("Import PDF", f"{path.name} : aucun graphique vectoriel trouvé. "
-                            "PDF scanné ou graphiques en image : capturez-les "
-                            "(Ctrl+V) ou ajoutez-les comme images (Ctrl+I).")
-            return False
         if choose is None and QtWidgets.QApplication.platformName() != "offscreen":
-            dialog = PdfImportDialog(path.name, component.graphs, found, self.view)
+            dialog = PdfImportDialog(draft, self.view)
             if not dialog.exec():
                 return False
-            choose = dialog.selected()
-        if choose is not None:
-            choose = [i for i in choose if 0 <= i < len(found)]
-            if not choose:
-                self.view.message("Aucun graphique choisi : rien n'est importé", 5000)
-                return False
-            found = [found[i] for i in choose]
-            component.graphs = [component.graphs[i] for i in choose]
-        component.notes, warnings = pdfimport.import_notes(path.name, found)
+            choice = dialog.choice()
+        else:
+            part = part or draft.parts[0]
+            if choose is None:
+                choose = [i for i, dg in enumerate(draft.graphs) if dg.part == part]
+            choice = {"indices": [i for i in choose if 0 <= i < len(draft.graphs)], "part": part}
+        if not choice["indices"]:
+            self.view.message("Aucun graphique choisi : rien n'est importé", 5000)
+            return False
+        component, warnings = draft.component(**choice)
         self.set_component(component, None)
         self.set_dirty(True)                    # nouveau projet, pas encore enregistré
         curves = sum(len(g.datasets) for g in component.graphs)
-        text = f"{path.name} : {len(component.graphs)} graphique(s), {curves} courbe(s) importés"
+        title = component.part_number or path.name
+        text = f"{title} : {len(component.graphs)} graphique(s), {curves} courbe(s) importés"
+        if len(draft.parts) > 1:
+            other = [p for p in draft.parts if p != (choice.get("part") or draft.parts[0])]
+            text += f" ; partie {other[0]} : importer le PDF une seconde fois"
         if warnings:
             text += f" ; {len(warnings)} point(s) à vérifier (notes du composant)"
         self.view.message(text, 10000)

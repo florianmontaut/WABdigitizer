@@ -68,26 +68,47 @@ Fichier › **Importer une datasheet PDF...** (`Ctrl+Shift+O`, ou glisser-dépos
 récentes) sont lus dans les tracés et le texte du PDF, sans passer par une image, et
 forment un **nouveau composant**, à vérifier puis enregistrer ou publier.
 
-Une fenêtre liste les graphiques trouvés (page, nom, axes, nombre de courbes, points à
-vérifier) avec l'aperçu de celui choisi, les courbes lues par-dessus : cocher ceux à
-importer. Les conditions lues et la liste « À vérifier » vont dans les notes du composant.
+La fenêtre d'import montre :
+- le **composant** : référence, fabricant et catégorie lus en première page
+  (modifiables) ; pour un **module IGBT + diode**, la partie importée (IGBT ou Diode :
+  deux composants, un import chacun ; référence « … (diode) ») ;
+- les **graphiques** trouvés : page, nom, caractéristique reconnue (sortie, transfert,
+  diode, énergies, Zth, capacités, SOA…), **rôle PLECS** proposé (modifiable), axes,
+  courbes, points à vérifier ; à cocher ;
+- l'**aperçu** du graphique choisi (courbes lues par-dessus l'image), ses courbes avec
+  leurs conditions, ses avertissements.
 
+Ce qui est lu :
 - **Graphiques** : repérés par leur cadre et leur grille ; image = diagramme rendu
   (200 dpi) et recadré.
 - **Calibration** automatique : graduations lues (exposants 10^n, virgule décimale, axes
   log), ajustement sur toutes les graduations ; repères posés sur les graduations
   extrêmes.
 - **Courbes** : sommets exacts du PDF (pas de rééchantillonnage), morceaux et pointillés
-  recollés (jamais à un point où partent plusieurs courbes) ; tracés en double écartés. Nom et condition : étiquette posée près de la courbe, ou entrée de légende
-  rapprochée par la couleur, le pointillé, l'épaisseur. Température lue (« Tj = 25 °C »).
-- **Titres d'axes** (grandeur et unité) et **légende de la figure** (« Figure 7. ... »)
-  pour le nom du graphique ; conditions lues et avertissements dans les notes du
-  composant.
+  recollés (jamais à un point où partent plusieurs courbes) ; tracés en double écartés.
+  Nom : étiquette posée près de la courbe (encadrée ou non), ou entrée de légende
+  rapprochée par la couleur, le pointillé, l'épaisseur.
+- **Axes** : grandeur (symbole : « ID » de « Drain Current : ID ») et unité (« ºC » ->
+  « °C », « P.U. » -> sans unité) ; titres sur une ou deux lignes, tournés ou au-dessus
+  de l'axe.
+- **Conditions** de chaque courbe : son étiquette (« 8 V » + « parameter: VGS » ->
+  « VGS = 8 V »), puis les conditions du graphique (légende de la figure, encadrés :
+  « Tj = 25 °C », « VCE = 600 V ») ; Tj renseignée. Les lettres dessinées des
+  conditions sont reconstituées (« _j = 25 °C » -> « Tj = 25 °C »).
+- **Plages et listes** (« VGS = 6~18 V, 2 V step », « VGS = 12, 14, 16, 18 V », encadré
+  d'une valeur par ligne) : une valeur par courbe sans étiquette, dans l'ordre du courant
+  (sortie, transfert, diode), signalé « à vérifier ».
+- **Énergies** : Eon et Eoff (ou Erec) d'un même graphique séparés en deux graphiques
+  (même image), un rôle PLECS chacun.
+- **Rôles PLECS** proposés : conduction (caractéristique de sortie ou v(i), une courbe
+  par température ; diode d'un module : partie Diode), fermeture (Eon(i)), ouverture
+  (Eoff(i), Erec(i) de la diode). Un réseau de courbes selon VGS à une seule température
+  n'a pas de rôle (pas une table PLECS).
 
 Limites : PDF scanné ou graphiques en image (non lus, signalés) ; courbes de même style
-sans étiquette (à nommer) ; étiquettes de plage (« VGS = 6~18 V, 2 V step ») ;
-datasheets anciennes tout en noir à pointillés dessinés tiret par tiret (FF300R12KT4) :
-calibration juste, courbes et étiquettes à reprendre.
+sans étiquette (à nommer) ; étiquettes absentes à la source (ST : seulement les courbes
+extrêmes) ; datasheets anciennes tout en noir à pointillés dessinés tiret par tiret
+(FF300R12KT4) : calibration juste, courbes et étiquettes à reprendre.
 
 PDF scanné : rien n'est trouvé, capturer les graphiques (`Ctrl+V`) ou les ajouter comme
 images. Paquets facultatifs : `pdfminer.six`, `pypdfium2` (et `matplotlib` pour les
@@ -106,8 +127,11 @@ tests) ; sans eux, la commande est grisée. Depuis Python :
 
 ### Export PLECS
 
-- Catégorie du composant : IGBT, MOSFET, Diode ou Thyristor.
+- Catégorie du composant : IGBT, MOSFET, JFET (exporté comme MOSFET, signalé), Diode
+  ou Thyristor.
 - Chaque graphique reçoit un **rôle PLECS** : conduction v(i), Eon(i) ou Eoff(i) / Err(i).
+  La conduction accepte une caractéristique de sortie i(v) (axes échangés à l'export)
+  et le 3e quadrant (valeurs absolues).
   Unités contrôlées (courant en A ou multiple, énergie en J ou multiple, tension en V).
 - Chaque courbe a sa **température** et, pour les énergies, sa **tension de commutation** :
   champs Tj (°C) et Tension (V), sinon lus dans la condition (« Tj = 125 °C, VCE = 600 V »).

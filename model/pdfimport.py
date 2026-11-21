@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from . import datasheet
 from .calibration import AxisCalibration, to_four_points
 from .document import PALETTE, Axis, Component, Dataset, Graph
 
@@ -102,6 +103,8 @@ class Stroke:
 
 
 def clean(text: str) -> str:
+    if len(text) == 1 and ord(text) < 32:
+        return " "                        # espace codée en caractère de contrôle (FF300R12KT4)
     if len(text) == 1 and 0xF000 <= ord(text) <= 0xF0FF:
         return SYMBOL.get(ord(text) - 0xF000, UNKNOWN)
     if text.startswith("(cid:"):
@@ -134,7 +137,7 @@ def flatten(page):
 
     def char(c):
         a, b, cc, d, e, f = c.matrix
-        upright = abs(b) < 1e-6 and abs(cc) < 1e-6
+        upright = abs(b) <= 1e-3 * abs(a)          # un italique (cc != 0) reste horizontal
         return Char(clean(c.get_text()), c.x0, c.y0, c.x1, c.y1,
                     c.size if upright else (c.x1 - c.x0), e, f, upright, "Bold" in c.fontname)
 
@@ -187,20 +190,26 @@ def lines(chars) -> list:
     Lignes de texte horizontales : caractères de même ligne de base (indices et exposants
     rattachés), triés par x. Rend [(texte, [Char])] ; indices « _ », exposants « ^ ».
     """
-    rows = []
+    # 1. même ligne de base (les grands caractères d'abord : un indice rejoint sa ligne)
+    bands = []
     for c in sorted((c for c in chars if c.upright), key=lambda c: -c.size):
-        for row in rows:
-            ref = row[0]
-            if abs(c.by - ref.by) < 0.45 * ref.size \
-                    and c.x0 < max(r.x1 for r in row) + 2.0 * ref.size \
-                    and c.x1 > min(r.x0 for r in row) - 2.0 * ref.size:
-                row.append(c)
+        for band in bands:
+            if abs(c.by - band[0].by) < 0.45 * band[0].size:
+                band.append(c)
                 break
         else:
-            rows.append([c])
+            bands.append([c])
+    # 2. coupée aux grands trous (colonnes, textes voisins), une fois triée par x
     out = []
-    for row in rows:
-        row.sort(key=lambda c: c.x0)
+    for band in bands:
+        band.sort(key=lambda c: c.x0)
+        gap = 2.0 * max(c.size for c in band)
+        row = [band[0]]
+        for c in band[1:]:
+            if c.x0 - max(r.x1 for r in row) > gap:
+                out.append((join(row), row))
+                row = []
+            row.append(c)
         out.append((join(row), row))
     return out
 
@@ -223,23 +232,38 @@ def join(row) -> str:
 
 
 def rot_text(chars) -> str:
-    """Texte tourné de 90° (titre d'axe Y), lu de bas en haut."""
+    """
+    Texte tourné de 90° (titre d'axe Y), lu de bas en haut ; sur plusieurs lignes
+    (colonnes, de gauche à droite), indices décalés vers la droite.
+    """
     if not chars:
         return ""
     main = max(c.size for c in chars)
-    base = max(c.bx for c in chars if c.size == main)
-    text, prev, state = "", None, "n"
+    columns = []                          # lignes de base des grands caractères
+    for c in sorted((c for c in chars if c.size >= 0.85 * main), key=lambda c: c.bx):
+        if columns and abs(c.bx - columns[-1][-1]) < 0.45 * main:
+            columns[-1].append(c.bx)
+        else:
+            columns.append([c.bx])
+    bases = [float(np.mean(col)) for col in columns]
+    groups = [[] for _ in bases]
     for c in chars:
-        if prev is not None and c.y0 - prev.y1 > 0.22 * main:
-            text += " "
-        s = "n"
-        if abs(c.bx - base) > 0.15 * main:
-            s = "_" if c.bx > base else "^"
-        if s != state and s != "n":
-            text += s
-        text += c.text
-        state, prev = s, c
-    return re.sub(r"\s+", " ", text).strip()
+        groups[int(np.argmin([abs(c.bx - b) for b in bases]))].append(c)
+    out = []
+    for base, group in zip(bases, groups):
+        text, prev, state = "", None, "n"
+        for c in sorted(group, key=lambda c: c.y0):
+            if prev is not None and c.y0 - prev.y1 > 0.22 * main:
+                text += " "
+            s = "n"
+            if abs(c.bx - base) > 0.15 * main:
+                s = "_" if c.bx > base else "^"
+            if s != state and s != "n":
+                text += s
+            text += c.text
+            state, prev = s, c
+        out.append(text)
+    return re.sub(r"\s+", " ", " ".join(out)).strip()
 
 
 def words(chars) -> list:
@@ -300,12 +324,14 @@ def tick_labels(chars) -> list:
 
 def unit_split(title: str) -> tuple:
     """« V_DS [V] », « I_D (A) », « E / mJ » -> (nom, unité)."""
-    for pattern in (r"^(.*?)\s*\[([^\]]*)\]\s*$", r"^(.*?)\s*/\s*(\S+)$"):
-        m = re.match(pattern, title)
-        if m:
-            return m.group(1).strip(), m.group(2).strip()
-    m = re.match(r"^(.*?)\s*\(([^()]*)\)\s*$", title)
+    m = re.match(r"^(.*?)\s*\[([^\]]*)\]\s*$", title)        # « V_DS [V] »
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    m = re.match(r"^(.*?)\s*\(([^()]*)\)\s*$", title)         # « Z_thJC (°C/W) »
     if m and not m.group(1).endswith(("(", "_")):
+        return m.group(1).strip(), m.group(2).strip()
+    m = re.match(r"^(.*?)\s*/\s*(\S+)$", title)               # « E / mJ »
+    if m:
         return m.group(1).strip(), m.group(2).strip()
     return title.strip(), ""
 
@@ -716,6 +742,8 @@ def _analyse_frame(info, chars, strokes, page_no):
         row_y = np.mean([l["cy"] for l in below])
         tx = lines([c for c in free if c.x0 >= max(l["x1"] for l in below) - 1
                     and abs(c.cy - row_y) < 8])
+    if len(tx) > 1 and tx[0][1][0].by - tx[1][1][0].by < 1.8 * tx[0][1][0].size:
+        tx = [(tx[0][0] + " " + tx[1][0], tx[0][1] + tx[1][1])]     # titre sur deux lignes
     x_title = tx[0][0] if tx else ""
     if tx:
         used.update(id(c) for c in tx[0][1])
@@ -726,7 +754,8 @@ def _analyse_frame(info, chars, strokes, page_no):
     used.update(id(c) for c in rot)
     if not rot:
         above = [t for t in lines([c for c in chars if c.upright and id(c) not in used
-                                   and y1 - 2 < c.y0 < y1 + 30 and x0 - 40 < c.cx < x0 + 0.2 * W])
+                                   and ((y1 - 2 < c.y0 < y1 + 30 and x0 - 40 < c.cx < x0 + 0.2 * W)
+                                        or (c.x1 <= x0 + 1 and y1 - 12 < c.cy < y1 + 30))])
                  if t[1][-1].x1 - t[1][0].x0 < 0.3 * W]
         above.sort(key=lambda t: -t[1][0].by)
         y_title = " ".join(t for t, _ in above[:2])
@@ -809,21 +838,42 @@ def _analyse_frame(info, chars, strokes, page_no):
             warnings.append(f"légende « {plain(t)} » : {len(match)} courbes de même style")
         taken.add(id(row[0]))
         used.update(id(c) for c in row)
+    box_lines = Counter()                 # lignes de texte de chaque encadré
+    for t, row in text_lines:
+        cx = (row[0].x0 + row[-1].x1) / 2
+        cy = sum(c.cy for c in row) / len(row)
+        for b in boxes:
+            if b[0] - 1 <= cx <= b[2] + 1 and b[1] - 1 <= cy <= b[3] + 1:
+                box_lines[b] += 1
     assigned = {}
     for t, row in text_lines:
         if id(row[0]) in taken:
             continue
         cx = (row[0].x0 + row[-1].x1) / 2
         cy = sum(c.cy for c in row) / len(row)
-        if any(b[0] - 1 <= cx <= b[2] + 1 and b[1] - 1 <= cy <= b[3] + 1 for b in boxes):
-            notes.append(f"encadré : {plain(t)}")           # conditions de mesure
+        if re.search(r"\b(in|de)creas(e|ing)\b", t, re.I):
+            notes.append(f"texte : {plain(t)}")             # flèche « VGS increase »
+            used.update(id(c) for c in row)
+            continue
+        ds = [dist_to_polyline(np.array([cx, cy]), c["pts"]) for c in curves]
+        k = int(np.argmin(ds)) if curves else -1
+        # encadré : conditions de mesure, sauf une étiquette (« 10 V », « Eon », ou
+        # « T_J = 25 °C » posé contre une courbe)
+        box = next((b for b in boxes if b[0] - 1 <= cx <= b[2] + 1 and b[1] - 1 <= cy <= b[3] + 1),
+                   None)
+        alone = box is None or box_lines.get(box, 0) <= 1     # un encadré à plusieurs lignes :
+        label_like = alone and (                                # conditions de mesure
+            datasheet.BARE.match(plain(t)) or datasheet.energy_kind(t) or (
+                datasheet.SINGLE.match(plain(t)) and curves and ds[k] < 3 * row[0].size))
+        if not label_like and box is not None:
+            notes.append(f"encadré : {plain(t)}")
             used.update(id(c) for c in row)
             continue
         if not curves:
             continue
         inside = x0 <= cx <= x1 and y0 <= cy <= y1
-        ds = [dist_to_polyline(np.array([cx, cy]), c["pts"]) for c in curves]
-        k = int(np.argmin(ds))
+        if not inside and not re.search(r"\d", t):
+            continue                      # hors du cadre, un mot (suite de légende) : pas une étiquette
         if ds[k] > (0.3 * min(W, H) if inside else 2.5 * row[0].size):
             if inside:
                 notes.append(f"texte : {plain(t)}")
@@ -873,7 +923,7 @@ def _caption_blocks(page_lines, frames) -> list:
         cx = (row[0].x0 + row[-1].x1) / 2
         cy = sum(c.cy for c in row) / len(row)
         return any(f["frame"][0] - 2 <= cx <= f["frame"][2] + 2 and
-                   f["frame"][1] - 2 <= cy <= f["frame"][3] + 12 for f in frames)
+                   f["frame"][1] - 2 <= cy <= f["frame"][3] - 2 for f in frames)
     blocks = []
     for i, (t, row) in enumerate(rows):
         if not CAPTION.match(t):
@@ -886,7 +936,7 @@ def _caption_blocks(page_lines, frames) -> list:
             if gap > 1.7 * max(c.size for c in last) or CAPTION.match(t2):
                 break
             ratio = max(c.size for c in row2) / max(c.size for c in last)
-            if not 0.8 < ratio < 1.25 or in_frame(row2):
+            if not 0.75 <= ratio <= 1.3 or in_frame(row2):
                 continue
             if min(c.x1 for c in row2) > max(c.x1 for c in last) \
                     or max(c.x0 for c in row2) < min(c.x0 for c in last) - 5:
@@ -983,7 +1033,7 @@ def analyse_page(page, page_no) -> list:
                         key=lambda t: -t[1][0].by)
             g.caption = [t for t, _ in up]
         bottom = min([y0] + [c.y0 for c in own_c[k] if id(c) in used_all and c.cy < y0])
-        down = sorted(((t, r) for t, r in free_lines if bottom - 22 < r[0].by < bottom
+        down = sorted(((t, r) for t, r in free_lines if bottom - 32 < r[0].by < bottom
                        and min(c.x0 for c in r) < x1 and max(c.x1 for c in r) > x0),
                       key=lambda t: -t[1][0].by)
         g.caption += [t for t, _ in down]
@@ -1007,7 +1057,8 @@ def analyse(path, pages=None) -> list:
 
 
 # ================================================================ conversion en composant
-TEMPERATURE = re.compile(r"\bT\w*\s*=\s*([−-]?\d+(?:[.,]\d+)?)\s*[°º]\s*C")
+TEMPERATURE = re.compile(r"\bT[\w,]*\s*=\s*([−-]?\d+(?:[.,]\d+)?)\s*[°º]\s*C")
+PAIR = re.compile(r"([A-Za-z][\w()]*)\s*=\s*([^,;]+)")
 
 
 def _nominal(fit: AxisFit, pos: float, value: float) -> float:
@@ -1016,23 +1067,108 @@ def _nominal(fit: AxisFit, pos: float, value: float) -> float:
     return value if abs(fitted - value) <= 1e-3 * max(abs(value), 1e-12) else fitted
 
 
-def to_component(path, found, dpi=200, name=None) -> tuple:
-    """
-    Composant brouillon : un graphique par diagramme trouvé (image rendue et recadrée,
-    calibration orthonormée sur les graduations extrêmes, courbes en pixels de l'image).
-    Rend (Component, avertissements).
-    """
+@dataclass
+class DraftGraph:
+    """Graphique converti, avec ce que le texte en dit (type, partie, énergie, avertissements)."""
+    graph: Graph
+    found: FoundGraph
+    kind: str = "other"                   # clé de datasheet.KINDS
+    energy: str = ""                      # « on », « off », « rec »... (énergies)
+    diode: bool = False                   # graphique de diode (module IGBT + diode)
+    part: str = ""                        # composant auquel il revient (« IGBT », « Diode »)
+    conditions: list = field(default_factory=list)  # conditions communes, lisibles
+    warnings: list = field(default_factory=list)
+
+
+@dataclass
+class Draft:
+    """Import préparé : identité lue, graphiques convertis, parties (module : IGBT + diode)."""
+    path: pathlib.Path
+    identity: datasheet.Identity
+    graphs: list
+    parts: list
+
+    def component(self, indices=None, part=None, part_number=None, manufacturer=None,
+                  category=None) -> tuple:
+        """
+        Composant d'une partie (la première par défaut) : graphiques indices (sinon tous
+        ceux de la partie), identité lue ou donnée. Rend (Component, avertissements).
+        """
+        part = part or self.parts[0]
+        chosen = [dg for i, dg in enumerate(self.graphs)
+                  if (i in indices if indices is not None else dg.part == part)]
+        diode_part = part == "Diode" and len(self.parts) > 1
+        identity = self.identity
+        if part_number is None:
+            part_number = identity.part_number + (
+                " (diode)" if diode_part and identity.part_number else "")
+        if category is None:
+            category = "Diode" if diode_part else identity.category
+        component = Component(
+            name=self.path.stem + (" (diode)" if diode_part else ""),
+            part_number=part_number, category=category,
+            manufacturer=identity.manufacturer if manufacturer is None else manufacturer)
+        component.graphs = [dg.graph for dg in chosen]
+        component.notes, warnings = _notes(self.path.name, identity, chosen)
+        return component, warnings
+
+
+def _notes(filename, identity, chosen) -> tuple:
+    """Notes du composant (description, conditions lues, points à vérifier)."""
+    described, warnings = [], []
+    for dg in chosen:
+        where = f"{dg.graph.name} (p.{dg.found.page})"
+        if dg.conditions:
+            described.append(f"{where} : " + " ; ".join(dg.conditions))
+        warnings += [f"{where} : {w}" for w in dg.warnings]
+    text = [f"Importé de {filename} : {len(chosen)} graphique(s)."]
+    if identity is not None and identity.description:
+        text.append(identity.description)
+    if described:
+        text += ["", "Conditions lues :"] + [f"- {d}" for d in described]
+    if warnings:
+        text += ["", "À vérifier :"] + [f"- {w}" for w in warnings]
+    return "\n".join(text), warnings
+
+
+def _texts(g: FoundGraph, known) -> tuple:
+    """Légende, encadrés et textes du graphique, nettoyés (lettres dessinées, symboles)."""
+    def fix(t):
+        return datasheet.clean(datasheet.fix_symbols(t, known))
+    caption = [fix(t) for t in g.caption]
+    boxed = [fix(t.split(" : ", 1)[1]) for t in g.notes if t.startswith("encadré")]
+    loose = [fix(t.split(" : ", 1)[1]) for t in g.notes if t.startswith("texte")]
+    return caption, boxed, loose
+
+
+def _graph_conditions(texts) -> list:
+    """(symbole, valeur) des textes communs, sans les « I_D = f(V_DS) »."""
+    out = []
+    for text in texts:
+        if datasheet.expand_range(text):
+            continue                      # plage ou liste de valeurs : une par courbe
+        for symbol, value in PAIR.findall(text):
+            value = value.strip()
+            if value.count(")") > value.count("("):
+                value = value[:value.rfind(")")].strip()     # « (T_J = 25 °C) »
+            if re.search(r"\bf\s*\(", value) or symbol.lower().startswith("param"):
+                continue
+            out.append((symbol, value))
+    return out
+
+
+def _build(path, found, dpi=200) -> list:
+    """Graphiques convertis : image, calibration, axes, courbes et leurs conditions."""
     import pypdfium2 as pdfium
     path = pathlib.Path(path)
     scale = dpi / 72.0
-    component = Component(name=name or path.stem)
-    rendered = {}
+    rendered, out = {}, []
     try:
         doc = pdfium.PdfDocument(str(path))
     except Exception as error:            # pypdfium2 : PdfiumError
         raise PdfImportError(f"{path.name} : PDF illisible ({error})") from error
     try:
-        for n, g in enumerate(found, 1):
+        for g in found:
             if g.page not in rendered:
                 page = doc[g.page - 1]
                 left, bottom, right, top = page.get_cropbox()
@@ -1045,13 +1181,11 @@ def to_component(path, found, dpi=200, name=None) -> tuple:
             r0 = max(int(np.floor((top - by1) * scale)), 0)
             r1 = min(int(np.ceil((top - by0) * scale)), image.shape[0])
 
-            def to_pixels(points, c0=c0, r0=r0):
+            def to_pixels(points, c0=c0, r0=r0, left=left, top=top):
                 points = np.asarray(points, dtype=float).reshape(-1, 2)
                 return np.column_stack([(points[:, 0] - left) * scale - c0,
                                         (top - points[:, 1]) * scale - r0])
-
-            xs = sorted(g.x.ticks)
-            ys = sorted(g.y.ticks)
+            xs, ys = sorted(g.x.ticks), sorted(g.y.ticks)
             (xa, xva, _), (xb, xvb, _) = xs[0], xs[-1]
             (ya, yva, _), (yb, yvb, _) = ys[0], ys[-1]
             origin, x2, y2 = to_pixels([(xa, ya), (xb, ya), (xa, yb)])
@@ -1060,56 +1194,164 @@ def to_component(path, found, dpi=200, name=None) -> tuple:
                 x1=_nominal(g.x, xa, xva), x2=_nominal(g.x, xb, xvb),
                 y1=_nominal(g.y, ya, yva), y2=_nominal(g.y, yb, yvb),
                 log_x=g.x.log, log_y=g.y.log)
-            graph = Graph(name=g.title, image=np.ascontiguousarray(image[r0:r1, c0:c1]),
-                          source=f"{path.name} p.{g.page}")
-            for k, title_text in (("x", g.x_title), ("y", g.y_title)):
-                quantity, unit = unit_split(title_text)
-                setattr(graph, f"{k}_axis", Axis(plain(quantity), plain(unit)))
-            for i, curve in enumerate(g.curves):
-                label = plain(curve.label)
-                pixels = to_pixels(curve.points)
-                keep = np.ones(len(pixels), bool)
-                keep[1:] = np.any(np.abs(np.diff(pixels, axis=0)) > 1e-6, axis=1)
-                dataset = Dataset(name=label or f"Courbe {i + 1}",
-                                  color=PALETTE[i % len(PALETTE)],
-                                  condition=label if "=" in label else "",
-                                  pixels=pixels[keep])
-                dataset.curve_color = tuple(int(round(255 * v)) for v in curve.color)
-                m = TEMPERATURE.search(label)
-                if m:
-                    dataset.temperature = float(m.group(1).replace("−", "-").replace(",", "."))
-                graph.datasets.append(dataset)
-            if not graph.datasets:
-                graph.add_dataset()
-            graph.set_calibration(calibration)
-            component.graphs.append(graph)
+            out += _interpret(g, np.ascontiguousarray(image[r0:r1, c0:c1]), calibration,
+                              to_pixels, f"{path.name} p.{g.page}")
     finally:
         doc.close()
-    component.notes, warnings = import_notes(path.name, found)
+    return out
+
+
+def _interpret(g, image, calibration, to_pixels, source) -> list:
+    """Sens d'un graphique : axes, conditions, plages, type ; Eon et Eoff séparés."""
+    (xq, xu, _), (yq, yu, _) = (datasheet.axis(*unit_split(t)) for t in (g.x_title, g.y_title))
+    caption, boxed, loose = _texts(g, (xq, yq))
+    title = datasheet.plain(caption[0]) if caption else f"Page {g.page}"
+    param = datasheet.parameter(" ".join(caption + boxed))
+    warnings = list(g.warnings)
+    labels = [datasheet.clean(datasheet.fix_symbols(c.label, (xq, yq))) for c in g.curves]
+    # plage « V_GS = 6~18V, 2V step », liste « VGS= 12, 14, 16 V », ou encadré d'une valeur
+    # par ligne (« VGS = -4V », « VGS = 0V »...) : une valeur par courbe sans étiquette
+    spans = [(text, datasheet.expand_range(text)) for text in labels + boxed + loose + caption]
+    spans = [(text, span) for text, span in spans if span]
+    kind = datasheet.classify(xq, xu, yq, yu, " ".join(caption))
+    stacked = {}
+    for text in boxed + loose:
+        single = datasheet.SINGLE.match(datasheet.plain(text))
+        pair = PAIR.match(text) if single else None
+        if pair:
+            stacked.setdefault(datasheet.plain(pair.group(1)), []).append(pair.group(2).strip())
+    for symbol, values in stacked.items():
+        numbers = [datasheet.BARE.match(v) for v in values]
+        if len(values) > 1 and all(numbers):
+            unit = numbers[0].group(2)
+            spans.append((None, (symbol, sorted(float(m.group(1).replace("−", "-").replace(",", "."))
+                                               for m in numbers), unit)))
+    used_texts = set()
+    for text, (symbol, values, unit) in spans[:1]:
+        targets = [i for i, label in enumerate(labels) if not label or label == text]
+        if kind not in ("output", "diode", "transfer"):
+            warnings.append(f"valeurs de « {datasheet.plain(text or symbol)} » non attribuées : "
+                            "ordre des courbes inconnu pour ce graphique")
+            break
+        magnitudes = [float(np.mean(np.abs(g.y.value(g.curves[i].points[:, 1]))))
+                      for i in targets]
+        assigned = datasheet.assign_range(magnitudes, values)
+        what = datasheet.plain(text) if text else f"{datasheet.plain(symbol)} = " + ", ".join(
+            f"{v:g}" for v in values) + f" {unit}"
+        if assigned is None:
+            warnings.append(f"« {what} » : {len(values)} valeurs pour {len(targets)} courbe(s) "
+                            "sans étiquette, non attribuées")
+        else:
+            for i, value in zip(targets, assigned):
+                labels[i] = f"{symbol} = {datasheet.format_value(value, unit)}"
+            warnings = [w for w in warnings if "sans étiquette" not in w]
+            warnings.append(f"valeurs de « {what} » attribuées dans l'ordre du courant : "
+                            "à vérifier")
+            used_texts = {datasheet.plain(symbol).lower()} if text is None else set()
+    if used_texts:                         # valeurs empilées : plus des conditions communes
+        boxed = [t for t in boxed if not (PAIR.match(t) and datasheet.plain(
+            PAIR.match(t).group(1)).lower() in used_texts)]
+    if kind not in ("output", "diode", "transfer"):
+        stacked_symbols = {k.lower() for k, v in stacked.items() if len(v) > 1}
+        boxed = [t for t in boxed if not (PAIR.match(t) and datasheet.plain(
+            PAIR.match(t).group(1)).lower() in stacked_symbols)]
+    pairs = _graph_conditions(caption[1:] + boxed)
+    conditions = [f"{datasheet.plain(s)} = {datasheet.plain(v)}" for s, v in pairs]
+    curves = []
+    for i, (curve, label) in enumerate(zip(g.curves, labels)):
+        own = datasheet.curve_condition(label, param)
+        present = {datasheet.plain(s).lower() for s, _ in PAIR.findall(own)}
+        extra = [c for (s, _), c in zip(pairs, conditions)
+                 if datasheet.plain(s).lower() not in present]
+        condition = datasheet.plain(", ".join(([own] if own else []) + extra))
+        pixels = to_pixels(curve.points)
+        keep = np.ones(len(pixels), bool)
+        keep[1:] = np.any(np.abs(np.diff(pixels, axis=0)) > 1e-6, axis=1)
+        dataset = Dataset(name=datasheet.plain(own) or f"Courbe {i + 1}",
+                          condition=condition if "=" in condition else "",
+                          pixels=pixels[keep])
+        dataset.curve_color = tuple(int(round(255 * v)) for v in curve.color)
+        m = TEMPERATURE.search(condition)
+        if m:
+            dataset.temperature = float(m.group(1).replace("−", "-").replace(",", "."))
+        energy = (datasheet.energy_kind(label) or datasheet.energy_kind(yq)
+                  or datasheet.energy_kind(title) or "")
+        curves.append((dataset, energy))
+    # énergies de fermeture et d'ouverture sur un même graphique : un graphique chacune
+    groups = {}
+    for dataset, energy in curves:
+        groups.setdefault(energy if kind == "energy" else "", []).append(dataset)
+    if len(groups) > 1:
+        warnings.append("énergies séparées en "
+                        + ", ".join(f"E{k}" if k else "sans nom" for k in groups)
+                        + " (même image)")
+    diode = datasheet.diode_graph(" ".join(caption), xq, yq, labels)
+    out = []
+    for energy, datasets in (groups.items() if groups else [("", [])]):
+        split = len(groups) > 1
+        graph = Graph(name=f"{title} — E{energy or '?'}" if split else title,
+                      image=image, source=source)
+        graph.x_axis = Axis(datasheet.plain(xq), xu)
+        graph.y_axis = Axis(f"E{energy}" if split and energy else datasheet.plain(yq), yu)
+        for k, dataset in enumerate(datasets):
+            dataset.color = PALETTE[k % len(PALETTE)]
+        graph.datasets = datasets or [Dataset(name="Courbe 1")]
+        graph.set_calibration(calibration)
+        out.append(DraftGraph(graph, g, kind, energy, diode, "", conditions, list(warnings)))
+    return out
+
+
+def _assign_parts(graphs, category) -> list:
+    """Parties et rôles PLECS : module IGBT avec graphiques de diode -> IGBT + Diode."""
+    module = category == "IGBT" and any(dg.diode for dg in graphs)
+    parts = ["IGBT", "Diode"] if module else [category or "Composant"]
+    for dg in graphs:
+        dg.part = "Diode" if module and dg.diode else parts[0]
+        temperatures = [d.temperature for d in dg.graph.datasets]
+        dg.graph.plecs_role = datasheet.plecs_role(dg.kind, temperatures, dg.energy,
+                                                   diode_part=module and dg.diode)
+    return parts
+
+
+def read_identity(path) -> datasheet.Identity:
+    """Référence, fabricant, catégorie et description lus en première page."""
+    from pdfminer.high_level import extract_pages
+    try:
+        page = next(iter(extract_pages(str(path), page_numbers=[0])))
+    except (StopIteration, OSError, ValueError, TypeError, KeyError):
+        return datasheet.Identity()
+    chars, _, _ = flatten(page)
+    rows = [(datasheet.clean(t), max(c.size for c in row)) for t, row in lines(chars) if t]
+    return datasheet.identify(rows, pathlib.Path(path).name)
+
+
+def prepare(path, dpi=200, pages=None) -> Draft:
+    """Import préparé, avant le choix de l'utilisateur ; PdfImportError sans graphique."""
+    path = pathlib.Path(path)
+    found = analyse(path, pages)
+    if not found:
+        raise PdfImportError(f"{path.name} : aucun graphique vectoriel trouvé "
+                             "(PDF scanné, ou graphiques en image)")
+    identity = read_identity(path)
+    graphs = _build(path, found, dpi)
+    return Draft(path, identity, graphs, _assign_parts(graphs, identity.category))
+
+
+def to_component(path, found, dpi=200, name=None) -> tuple:
+    """
+    Tous les graphiques trouvés, convertis (image recadrée, calibration orthonormée sur
+    les graduations extrêmes, courbes en pixels, conditions), sans lire l'identité.
+    Rend (Component, avertissements).
+    """
+    path = pathlib.Path(path)
+    graphs = _build(path, found, dpi)
+    _assign_parts(graphs, "")
+    component = Component(name=name or path.stem)
+    component.graphs = [dg.graph for dg in graphs]
+    component.notes, warnings = _notes(path.name, None, graphs)
     return component, warnings
 
 
-def import_notes(filename: str, found) -> tuple:
-    """Notes du composant (conditions lues, points à vérifier) et avertissements."""
-    described, warnings = [], []
-    for g in found:
-        conditions = [plain(t) for t in g.caption[1:]] + \
-            [t.split(" : ", 1)[1] for t in g.notes if t.startswith("encadré")]
-        if conditions:
-            described.append(f"{g.title} (p.{g.page}) : " + " ; ".join(conditions))
-        warnings += [f"{g.title} (p.{g.page}) : {w}" for w in g.warnings]
-    text = [f"Importé de {filename} : {len(found)} graphique(s)."]
-    if described:
-        text += ["", "Conditions lues :"] + [f"- {d}" for d in described]
-    if warnings:
-        text += ["", "À vérifier :"] + [f"- {w}" for w in warnings]
-    return "\n".join(text), warnings
-
-
 def import_pdf(path, dpi=200, pages=None) -> tuple:
-    """analyse + to_component. Rend (Component, avertissements) ; PdfImportError sinon."""
-    found = analyse(path, pages)
-    if not found:
-        raise PdfImportError(f"{pathlib.Path(path).name} : aucun graphique vectoriel trouvé "
-                             "(PDF scanné, ou graphiques en image)")
-    return to_component(path, found, dpi)
+    """prepare + composant de la première partie. Rend (Component, avertissements)."""
+    return prepare(path, dpi, pages).component()

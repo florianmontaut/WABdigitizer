@@ -774,27 +774,28 @@ def test_importer_une_datasheet_pdf(ctrl, tmp_path):
     pdf = datasheet(tmp_path / "essai.pdf")
     calibrated(ctrl)                                    # composant en cours, remplacé
     assert ctrl.view.actionImportPdf.isEnabled()
-    assert ctrl.import_pdf(pdf, choose=[1])            # le second graphique seulement
+    assert ctrl.import_pdf(pdf, choose=[1, 2])         # Eon et Eoff seulement
     c = ctrl.component
-    assert c.name == "essai" and len(c.graphs) == 1 and ctrl.path is None
+    assert (c.part_number, c.manufacturer, c.category) == ("ESSAI120M4", "Infineon", "MOSFET")
+    assert len(c.graphs) == 2 and ctrl.path is None
     assert ctrl.dirty and ctrl.undo_stack.count() == 0 and not ctrl.read_only
     graph = c.graphs[0]
     assert graph.name.startswith("Figure 2.") and graph.calibration.log_y
-    assert sorted(d.name for d in graph.datasets) == ["Eoff", "Eon"]
-    assert "Importé de essai.pdf : 1 graphique(s)" in c.notes and "Figure 1." not in c.notes
+    assert [d.name for d in graph.datasets] == ["Eon"] and graph.plecs_role == "turn_on"
+    assert "Importé de essai.pdf : 2 graphique(s)" in c.notes and "Figure 1." not in c.notes
     assert ctrl.graph is graph and ctrl.dataset is graph.datasets[0]
-    # sans écran, sans choix : tous ; aussi par glisser-déposer
+    # sans écran, sans choix : toute la partie ; aussi par glisser-déposer
     ctrl.open_files([str(pdf)])
-    assert len(ctrl.component.graphs) == 2
-    # rien de choisi, PDF sans graphique, fichier illisible : composant gardé
+    assert len(ctrl.component.graphs) == 3
+    # rien de choisi, PDF illisible : composant gardé
     assert not ctrl.import_pdf(pdf, choose=[])
     (tmp_path / "faux.pdf").write_text("pas un PDF", "utf-8")
     assert not ctrl.import_pdf(tmp_path / "faux.pdf")
-    assert "illisible" in ctrl.view.last_error and len(ctrl.component.graphs) == 2
+    assert "illisible" in ctrl.view.last_error and len(ctrl.component.graphs) == 3
     # le composant importé s'enregistre et se rouvre
     assert ctrl.write_project(tmp_path / "essai.pdig.json")
     ctrl.load_project(tmp_path / "essai.pdig.json")
-    assert len(ctrl.component.graphs) == 2 and ctrl.component.graphs[1].calibrated
+    assert len(ctrl.component.graphs) == 3 and ctrl.component.graphs[1].calibrated
 
 
 def test_dialogue_d_import_pdf(tmp_path):
@@ -803,18 +804,29 @@ def test_dialogue_d_import_pdf(tmp_path):
     pytest.importorskip("matplotlib")
     from model import pdfimport
     from test_pdfimport import datasheet
-    from view.pdf_import_dialog import PdfImportDialog
+    from view.pdf_import_dialog import ROLE_COLUMN, PdfImportDialog
     pdf = datasheet(tmp_path / "essai.pdf")
-    found = pdfimport.analyse(pdf)
-    component, _ = pdfimport.to_component(pdf, found, dpi=100)
+    draft = pdfimport.prepare(pdf, dpi=100)
     app = QtWidgets.QApplication.instance()
-    dialog = PdfImportDialog("essai.pdf", component.graphs, found)
-    assert dialog.selected() == [0, 1] and dialog.table.rowCount() == 2
-    assert dialog.table.item(1, 4).text().startswith("E [mJ]") and "log" in dialog.table.item(1, 4).text()
+    dialog = PdfImportDialog(draft)
+    assert dialog.selected() == [0, 1, 2] and dialog.table.rowCount() == 3
+    assert dialog.part_number.text() == "ESSAI120M4"
+    assert dialog.category.currentText() == "MOSFET"
+    axis = dialog.table.item(1, 6).text()
+    assert axis.startswith("Eon [mJ]") and "log" in axis
+    assert dialog.table.item(0, 3).text() == "Caractéristique de sortie"
+    role = dialog.table.cellWidget(0, ROLE_COLUMN)
+    assert role.currentData() == "conduction"
+    role.setCurrentIndex(role.findData(""))             # rôle retiré à la main
+    assert draft.graphs[0].graph.plecs_role == ""
     dialog.uncheck_all()
     assert dialog.selected() == []
     dialog.table.item(1, 0).setCheckState(QtCore.Qt.CheckState.Checked)
-    assert dialog.selected() == [1]
+    dialog.part_number.setText("REF2")
+    choice = dialog.choice()
+    assert choice["indices"] == [1] and choice["part_number"] == "REF2"
+    component, _ = draft.component(**choice)
+    assert component.part_number == "REF2" and len(component.graphs) == 1
     dialog.table.selectRow(1)
     assert "Eon" in dialog.details.toPlainText() and not dialog.preview.pixmap().isNull()
     dialog.deleteLater()

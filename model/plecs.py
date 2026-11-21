@@ -44,7 +44,8 @@ ELEMENTS = {
     "conduction": ("ConductionLoss", "VoltageDrop", "v", "V"),
 }
 # catégorie du composant -> classe PLECS
-CLASSES = {"IGBT": "IGBT", "MOSFET": "MOSFET", "Diode": "Diode", "Thyristor": "Thyristor"}
+CLASSES = {"IGBT": "IGBT", "MOSFET": "MOSFET", "JFET": "MOSFET", "Diode": "Diode",
+           "Thyristor": "Thyristor"}
 SAFETY_VARIABLE = "Csecu"
 EXTRAPOLATION_WARNING = 0.05      # prolongement signalé au-delà de 5 % de la plage relevée
 
@@ -117,6 +118,13 @@ def _unit_scale(unit_text: str, dimension: str, what: str) -> float:
     return unit.scale
 
 
+def _is_dimension(unit_text: str, dimension: str) -> bool:
+    try:
+        return units.parse_unit(unit_text).dims == units.parse_unit(dimension).dims
+    except units.UnitError:
+        return False
+
+
 def nice_step(span: float, intervals: int) -> float:
     """Pas « rond » (1, 2, 2,5 ou 5 × 10^k) donnant environ intervals intervalles."""
     raw = span / max(1, intervals)
@@ -175,8 +183,15 @@ def collect(component, role: str) -> list:
         where = f"« {graph.name} »"
         if graph.calibration is None:
             raise PlecsError(f"{where} : graphique non calibré")
-        i_scale = _unit_scale(graph.x_axis.unit, "A", f"{where}, axe X")
-        y_scale = _unit_scale(graph.y_axis.unit, dimension, f"{where}, axe Y")
+        # conduction donnée en i(v) (caractéristique de sortie) : axes échangés
+        swap = role == "conduction" and _is_dimension(graph.x_axis.unit, "V") \
+            and _is_dimension(graph.y_axis.unit, "A")
+        if swap:
+            i_scale = _unit_scale(graph.y_axis.unit, "A", f"{where}, axe Y")
+            y_scale = _unit_scale(graph.x_axis.unit, dimension, f"{where}, axe X")
+        else:
+            i_scale = _unit_scale(graph.x_axis.unit, "A", f"{where}, axe X")
+            y_scale = _unit_scale(graph.y_axis.unit, dimension, f"{where}, axe Y")
         for dataset in graph.datasets:
             if len(dataset) < 2:
                 continue
@@ -190,6 +205,11 @@ def collect(component, role: str) -> list:
                                  "(champ Tension, ou « VCE = 600 V » dans la condition)")
             data = dataset.data(graph.calibration)
             data = data[np.isfinite(data).all(axis=1)]
+            if swap:
+                data = data[:, ::-1]
+            if role == "conduction" and np.median(data[:, 0]) < 0:
+                data = -data                  # 3e quadrant (diode, courant inverse) : |i|, |v|
+            data = data[np.argsort(data[:, 0], kind="stable")]
             curves.append({"name": name, "T": float(temperature),
                            "V": None if voltage is None else float(voltage),
                            "i": data[:, 0] * i_scale, "y": data[:, 1], "y_scale": y_scale})
@@ -291,6 +311,8 @@ def build(component, settings: PlecsSettings | None = None) -> tuple:
         raise PlecsError(f"catégorie « {component.category or 'aucune'} » : choisir "
                          + ", ".join(CLASSES) + " pour un export PLECS")
     warnings = []
+    if component.category == "JFET":
+        warnings.append("JFET exporté comme MOSFET (PLECS n'a pas de classe JFET)")
     roles = [role for role in ("turn_on", "turn_off", "conduction")
              if any(g.plecs_role == role for g in component.graphs)]
     if not roles:

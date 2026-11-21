@@ -50,7 +50,8 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   - `export.py` : CSV, grille commune, `interp(...)`, fiche « ParamDigitizer component v1 ».
   - `plecs.py` : description thermique PLECS (XML « SemiconductorLibrary » 1.1). Rôle
     par graphique (`Graph.plecs_role`), Tj / tension par courbe, réglages dans
-    `Component.plecs`. Référence : `tests/plecs_reference_PMF75-120.xml`, fichier fait à
+    `Component.plecs`. Conduction : i(v) (sortie) échangée en v(i), 3e quadrant en
+    valeurs absolues ; catégorie JFET exportée en MOSFET (avertissement). Référence : `tests/plecs_reference_PMF75-120.xml`, fichier fait à
     la main par l'utilisateur, que `test_plecs.py` reproduit. Les XSD de l'ancien dépôt
     (générés depuis ce seul exemple) ne sont pas fiables : non utilisés.
   - `library.py` : librairie de composants (dossier, partageable) :
@@ -72,10 +73,25 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     `drop_duplicates` : courbe couverte par une autre), étiquettes (légende
     par couleur / pointillé / épaisseur, sinon texte le plus proche), légendes de
     figures numérotées (`_match_captions` : toutes dessus ou toutes dessous).
-    `to_component` : image recadrée (pypdfium2, 200 dpi), calibration orthonormée sur
-    les graduations extrêmes, points en pixels ; avertissements dans `Component.notes`.
+    Les caractères en italique (matrice cisaillée) restent horizontaux ; une espace codée
+    en caractère de contrôle (FF300) redevient une espace. `prepare` -> `Draft` :
+    `read_identity` (première page), `_build` (image recadrée par pypdfium2 à 200 dpi,
+    calibration orthonormée sur les graduations extrêmes, points en pixels), `_interpret`
+    (sens par `datasheet` : axes, conditions, plages, type ; Eon / Eoff séparés en deux
+    `Graph` sur la même image), `_assign_parts` (module IGBT + diode -> parties, rôles).
+    `Draft.component(indices, part, identité)` : un composant par partie, notes
+    (description, conditions, avertissements). `to_component` : tous les graphiques,
+    sans identité.
     Corpus de mise au point (fichiers de l'utilisateur, jamais versionnés) : voir la
     mémoire du projet ; `tests/test_pdfimport.py` fabrique ses PDF avec matplotlib.
+  - `datasheet.py` : sens d'une datasheet, règles explicites sur le texte (pas de LLM :
+    déterministe, hors ligne, testé par `test_datasheet.py` sur des extraits de plusieurs
+    fabricants). `identify` (référence, fabricant par liste connue puis nom du fichier,
+    catégorie par priorité IGBT > MOSFET > JFET > Thyristor > Diode), `axis`,
+    `fix_symbols` (lettre dessinée d'après le symbole d'un axe ou l'unité), `clean`,
+    `parameter` / `curve_condition`, `expand_range` (plage ou liste) / `assign_range`
+    (ordre du courant moyen), `classify` (`KINDS`), `energy_kind`, `diode_graph`,
+    `plecs_role`. `dimension` contourne « pF » (préfixe pico inconnu de formules).
   - `compare.py` : comparaison entre composants de tous types. Courbes regroupées par
     dimensions physiques (X, Y) de leurs unités (`formules.units`), sinon par noms des
     grandeurs ; `Frame` : unités communes (celles de la première courbe) ; valeurs au
@@ -85,11 +101,13 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
 - `view/compare_window.py` + `controller/compare_controller.py` : fenêtre de comparaison
   non modale, enfant de la fenêtre principale, créée une fois (`MainController.open_compare`),
   composant ouvert lu par `weakref.WeakMethod`, réglages partagés (`options`).
-- `view/pdf_import_dialog.py` : choix des graphiques d'une datasheet PDF (table cochable,
-  aperçu avec les courbes lues, avertissements). `MainController.open_pdf` / `import_pdf`
-  (`choose` : indices sans dialogue ; sans écran : tous) : nouveau composant sans
-  fichier, marqué modifié, pile vidée (comme une ouverture) ; notes recalculées pour les
-  graphiques retenus (`pdfimport.import_notes`). Commande grisée sans les paquets.
+- `view/pdf_import_dialog.py` : import d'une datasheet PDF : identité modifiable, partie
+  (module), table cochable avec caractéristique et rôle PLECS (liste par ligne, écrit
+  dans `Graph.plecs_role`), aperçu et détail. `choice()` -> arguments de
+  `Draft.component`. `MainController.open_pdf` / `import_pdf` (`choose` : indices sans
+  dialogue ; sans écran : graphiques de la partie `part`, la première par défaut) :
+  nouveau composant sans fichier, marqué modifié, pile vidée (comme une ouverture).
+  Commande grisée sans les paquets.
 - `view/library_panel.py` (dock « Librairie » de la fenêtre principale, actions créées
   par `MainWindow`) + `controller/library_controller.py` (lecture, table filtrée et triée,
   sélection). Publier, ouvrir, comparer, supprimer : `MainController` (`publish`,
@@ -116,7 +134,8 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   au relâchement. Les propriétés (noms, unités, réglages) restent hors de la pile :
   `set_dirty()` ; l'étoile du titre = hors pile ou pile non propre.
 - `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_compare.py`, `test_zoom.py`,
-  `test_library.py`, `test_pdfimport.py`, `test_gui.py` (contrôleurs sans écran).
+  `test_library.py`, `test_pdfimport.py`, `test_datasheet.py`, `test_gui.py`
+  (contrôleurs sans écran).
 
 ## Choix de conception à respecter
 
@@ -153,11 +172,12 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
 - Export PLECS : jamais importé dans PLECS lui-même ; classes « IGBT with Diode » /
   « MOSFET with Diode », modèle de Cauer, ajustement de Foster sur une courbe Zth(t).
 
-- Import PDF (proposition J0–J4, J0 à J2 faits) : sens (référence,
-  fabricant, rôles PLECS, plages « 6~18 V, 2 V step ») ; repli image (calibration
+- Import PDF (proposition J0–J4, J0 à J3 faits) : J4 repli image (calibration
   automatique sur une image incorporée quand les graduations sont du texte). Faible sur
-  les datasheets anciennes tout en noir (FF300R12KT4) ; lettres italiques dessinées
-  (conditions « _j=25 °C ») ; caractères sans Unicode (« ¤ »).
+  les datasheets anciennes tout en noir (FF300R12KT4 : pointillés tiret par tiret,
+  légendes sans numéro, Ω de la police Symbol lu « W ») ; caractères sans Unicode
+  (« ¤ ») ; conduction sur un réseau de courbes selon VGS (choisir la tension de grille) ;
+  plages « VGS = −5 … 18 V » sans pas (ST). formules : préfixe pico (« pF »).
 - Détection automatique des axes d'une image (raster) : piste dans le brouillon
   `test_qpaint.py`.
 - Loupe de pointage (WPD), courbes non fonctionnelles (hystérésis) : l'extraction trie par X.

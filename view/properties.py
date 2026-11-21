@@ -17,7 +17,7 @@ from model.plecs import ROLES
 # libellé affiché -> rôle enregistré
 PLECS_ROLES = {label: key for key, label in ROLES.items()}
 
-CATEGORIES = ["", "IGBT", "MOSFET", "Diode", "Thyristor", "Condensateur", "Inductance",
+CATEGORIES = ["", "IGBT", "MOSFET", "JFET", "Diode", "Thyristor", "Condensateur", "Inductance",
               "Transformateur", "Dissipateur", "Autre"]
 
 
