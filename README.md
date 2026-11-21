@@ -58,17 +58,16 @@ Méthodes d'extraction :
 | Grille de X imposée | points aux X de la grille du graphique, commune à toutes ses courbes ; interpolation dans l'espace log sur un axe log |
 | Squelette | squelette des pixels, simplifié (Douglas-Peucker) |
 
-## Import d'une datasheet PDF (en cours)
+## Importer une datasheet PDF
 
-Le module `model/pdfimport.py` lit les graphiques d'une datasheet **vectorielle** (la
-plupart des datasheets récentes) dans les tracés et le texte du PDF, sans passer par une
-image, et en fait un composant brouillon. La commande de l'interface n'existe pas encore.
+Fichier › **Importer une datasheet PDF...** (`Ctrl+Shift+O`, ou glisser-déposer un
+`.pdf`) : les graphiques d'une datasheet **vectorielle** (la plupart des datasheets
+récentes) sont lus dans les tracés et le texte du PDF, sans passer par une image, et
+forment un **nouveau composant**, à vérifier puis enregistrer ou publier.
 
-```
-from model import pdfimport, document
-component, warnings = pdfimport.import_pdf("datasheet.pdf")
-document.save(component, "datasheet.pdig.json")      # s'ouvre dans l'application
-```
+Une fenêtre liste les graphiques trouvés (page, nom, axes, nombre de courbes, points à
+vérifier) avec l'aperçu de celui choisi, les courbes lues par-dessus : cocher ceux à
+importer. Les conditions lues et la liste « À vérifier » vont dans les notes du composant.
 
 - **Graphiques** : repérés par leur cadre et leur grille ; image = diagramme rendu
   (200 dpi) et recadré.
@@ -87,7 +86,10 @@ sans étiquette (à nommer) ; étiquettes de plage (« VGS = 6~18 V, 2 V step »
 datasheets anciennes tout en noir à pointillés dessinés tiret par tiret (FF300R12KT4) :
 calibration juste, courbes et étiquettes à reprendre.
 
-Paquets facultatifs : `pdfminer.six`, `pypdfium2` (et `matplotlib` pour les tests).
+PDF scanné : rien n'est trouvé, capturer les graphiques (`Ctrl+V`) ou les ajouter comme
+images. Paquets facultatifs : `pdfminer.six`, `pypdfium2` (et `matplotlib` pour les
+tests) ; sans eux, la commande est grisée. Depuis Python :
+`component, warnings = model.pdfimport.import_pdf("datasheet.pdf")`.
 
 ## Exports
 

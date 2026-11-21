@@ -18,7 +18,7 @@ from formules import FormulaError, units
 from qtsocle import options_panel, settings, theme
 from ressources import app_settings
 
-from model import document, export, extraction, fit, library, mask, plecs, sheet
+from model import document, export, extraction, fit, library, mask, pdfimport, plecs, sheet
 from model.calibration import (AxisCalibration, CalibrationError, orthogonal_points,
                                to_four_points)
 from model.library import LibraryError
@@ -31,6 +31,7 @@ from view.canvas import Mode
 from view.compare_window import CompareWindow
 from view.dialogs import CalibrationDialog, format_value, parse_value
 from view.main_window import IMAGE_SUFFIXES, qimage_to_array
+from view.pdf_import_dialog import PdfImportDialog
 
 ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
 CLICK_TOLERANCE = 7          # pixels de l'écran
@@ -88,6 +89,11 @@ class MainController(QtCore.QObject):
         view.actionOpenImage.triggered.connect(self.open_image)
         view.actionPaste.triggered.connect(self.paste_image)
         view.actionOpen.triggered.connect(self.open_project)
+        view.actionImportPdf.triggered.connect(self.open_pdf)
+        if not pdfimport.available():
+            view.actionImportPdf.setEnabled(False)
+            view.actionImportPdf.setToolTip("Import PDF indisponible : installez pdfminer.six "
+                                            "et pypdfium2")
         view.actionSave.triggered.connect(self.save_project)
         view.actionSaveAs.triggered.connect(self.save_project_as)
         view.actionExportCsv.triggered.connect(self.export_csv)
@@ -537,6 +543,8 @@ class MainController(QtCore.QObject):
         for path in paths:
             if str(path).lower().endswith(".json"):
                 self.load_project(path)
+            elif str(path).lower().endswith(".pdf"):
+                self.import_pdf(path)
             elif pathlib.Path(path).suffix.lower() in IMAGE_SUFFIXES:
                 self.add_image_file(path)
 
@@ -562,6 +570,61 @@ class MainController(QtCore.QObject):
             return
         self._remember_dir(path)
         self.set_component(component, path)
+
+    def open_pdf(self, *_):
+        if not self._ask_discard():
+            return
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self.view, "Importer une datasheet PDF", self._dialog_dir(), "PDF (*.pdf)")
+        if path:
+            self.import_pdf(path, ask=False)
+
+    def import_pdf(self, path, choose=None, ask=True) -> bool:
+        """
+        Datasheet PDF vectorielle -> nouveau composant (sans fichier, à enregistrer) :
+        graphiques trouvés, choisis dans PdfImportDialog (sans écran, ou choose donné :
+        ces indices, sinon tous), calibrés, courbes relevées. Avertissements dans les notes
+        du composant.
+        """
+        if ask and not self._ask_discard():
+            return False
+        path = pathlib.Path(path)
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        try:
+            found = pdfimport.analyse(path)
+            component, _ = pdfimport.to_component(path, found) if found else (None, [])
+        except pdfimport.PdfImportError as error:
+            self.view.error("Import PDF", str(error))
+            return False
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+        self._remember_dir(path)
+        if not found:
+            self.view.error("Import PDF", f"{path.name} : aucun graphique vectoriel trouvé. "
+                            "PDF scanné ou graphiques en image : capturez-les "
+                            "(Ctrl+V) ou ajoutez-les comme images (Ctrl+I).")
+            return False
+        if choose is None and QtWidgets.QApplication.platformName() != "offscreen":
+            dialog = PdfImportDialog(path.name, component.graphs, found, self.view)
+            if not dialog.exec():
+                return False
+            choose = dialog.selected()
+        if choose is not None:
+            choose = [i for i in choose if 0 <= i < len(found)]
+            if not choose:
+                self.view.message("Aucun graphique choisi : rien n'est importé", 5000)
+                return False
+            found = [found[i] for i in choose]
+            component.graphs = [component.graphs[i] for i in choose]
+        component.notes, warnings = pdfimport.import_notes(path.name, found)
+        self.set_component(component, None)
+        self.set_dirty(True)                    # nouveau projet, pas encore enregistré
+        curves = sum(len(g.datasets) for g in component.graphs)
+        text = f"{path.name} : {len(component.graphs)} graphique(s), {curves} courbe(s) importés"
+        if warnings:
+            text += f" ; {len(warnings)} point(s) à vérifier (notes du composant)"
+        self.view.message(text, 10000)
+        return True
 
     def open_sheet(self, path, data=None) -> bool:
         """

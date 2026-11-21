@@ -83,6 +83,11 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
 - `view/compare_window.py` + `controller/compare_controller.py` : fenêtre de comparaison
   non modale, enfant de la fenêtre principale, créée une fois (`MainController.open_compare`),
   composant ouvert lu par `weakref.WeakMethod`, réglages partagés (`options`).
+- `view/pdf_import_dialog.py` : choix des graphiques d'une datasheet PDF (table cochable,
+  aperçu avec les courbes lues, avertissements). `MainController.open_pdf` / `import_pdf`
+  (`choose` : indices sans dialogue ; sans écran : tous) : nouveau composant sans
+  fichier, marqué modifié, pile vidée (comme une ouverture) ; notes recalculées pour les
+  graphiques retenus (`pdfimport.import_notes`). Commande grisée sans les paquets.
 - `view/library_panel.py` (dock « Librairie » de la fenêtre principale, actions créées
   par `MainWindow`) + `controller/library_controller.py` (lecture, table filtrée et triée,
   sélection). Publier, ouvrir, comparer, supprimer : `MainController` (`publish`,
@@ -137,8 +142,7 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
 - Export PLECS : jamais importé dans PLECS lui-même ; classes « IGBT with Diode » /
   « MOSFET with Diode », modèle de Cauer, ajustement de Foster sur une courbe Zth(t).
 
-- Import PDF (proposition J0–J4, J0 et J1 faits) : commande et fenêtre d'import
-  (choix des graphiques, nouveau composant, commande de la pile) ; sens (référence,
+- Import PDF (proposition J0–J4, J0 à J2 faits) : sens (référence,
   fabricant, rôles PLECS, plages « 6~18 V, 2 V step ») ; repli image (calibration
   automatique sur une image incorporée quand les graduations sont du texte). Faible sur
   les datasheets anciennes tout en noir (FF300R12KT4) ; lettres italiques dessinées

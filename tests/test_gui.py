@@ -759,3 +759,59 @@ def test_fiche_ouverte_comme_un_fichier(ctrl, tmp_path):
     assert ctrl.read_only and ctrl.component.part_number == "A1"
     ctrl.load_project(tmp_path / "library" / "absent.json")
     assert "absent.json" in ctrl.view.last_error and ctrl.read_only
+
+
+# ---------------------------------------------------------------- import PDF
+def test_importer_une_datasheet_pdf(ctrl, tmp_path):
+    pytest.importorskip("pdfminer")
+    pytest.importorskip("pypdfium2")
+    pytest.importorskip("matplotlib")
+    from test_pdfimport import datasheet
+    pdf = datasheet(tmp_path / "essai.pdf")
+    calibrated(ctrl)                                    # composant en cours, remplacé
+    assert ctrl.view.actionImportPdf.isEnabled()
+    assert ctrl.import_pdf(pdf, choose=[1])            # le second graphique seulement
+    c = ctrl.component
+    assert c.name == "essai" and len(c.graphs) == 1 and ctrl.path is None
+    assert ctrl.dirty and ctrl.undo_stack.count() == 0 and not ctrl.read_only
+    graph = c.graphs[0]
+    assert graph.name.startswith("Figure 2.") and graph.calibration.log_y
+    assert sorted(d.name for d in graph.datasets) == ["Eoff", "Eon"]
+    assert "Importé de essai.pdf : 1 graphique(s)" in c.notes and "Figure 1." not in c.notes
+    assert ctrl.graph is graph and ctrl.dataset is graph.datasets[0]
+    # sans écran, sans choix : tous ; aussi par glisser-déposer
+    ctrl.open_files([str(pdf)])
+    assert len(ctrl.component.graphs) == 2
+    # rien de choisi, PDF sans graphique, fichier illisible : composant gardé
+    assert not ctrl.import_pdf(pdf, choose=[])
+    (tmp_path / "faux.pdf").write_text("pas un PDF", "utf-8")
+    assert not ctrl.import_pdf(tmp_path / "faux.pdf")
+    assert "illisible" in ctrl.view.last_error and len(ctrl.component.graphs) == 2
+    # le composant importé s'enregistre et se rouvre
+    assert ctrl.write_project(tmp_path / "essai.pdig.json")
+    ctrl.load_project(tmp_path / "essai.pdig.json")
+    assert len(ctrl.component.graphs) == 2 and ctrl.component.graphs[1].calibrated
+
+
+def test_dialogue_d_import_pdf(tmp_path):
+    pytest.importorskip("pdfminer")
+    pytest.importorskip("pypdfium2")
+    pytest.importorskip("matplotlib")
+    from model import pdfimport
+    from test_pdfimport import datasheet
+    from view.pdf_import_dialog import PdfImportDialog
+    pdf = datasheet(tmp_path / "essai.pdf")
+    found = pdfimport.analyse(pdf)
+    component, _ = pdfimport.to_component(pdf, found, dpi=100)
+    app = QtWidgets.QApplication.instance()
+    dialog = PdfImportDialog("essai.pdf", component.graphs, found)
+    assert dialog.selected() == [0, 1] and dialog.table.rowCount() == 2
+    assert dialog.table.item(1, 4).text().startswith("E [mJ]") and "log" in dialog.table.item(1, 4).text()
+    dialog.uncheck_all()
+    assert dialog.selected() == []
+    dialog.table.item(1, 0).setCheckState(QtCore.Qt.CheckState.Checked)
+    assert dialog.selected() == [1]
+    dialog.table.selectRow(1)
+    assert "Eon" in dialog.details.toPlainText() and not dialog.preview.pixmap().isNull()
+    dialog.deleteLater()
+    app.processEvents()

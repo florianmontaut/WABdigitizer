@@ -74,6 +74,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actionPaste = a("Coller une image", "paste",
                              "Ajouter un graphique depuis le presse-papiers", "Ctrl+V")
         self.actionOpen = a("Ouvrir un projet...", "open", shortcut="Ctrl+O")
+        self.actionImportPdf = a("Importer une datasheet PDF...", "pdf",
+                                 "Nouveau composant : graphiques, calibration et courbes "
+                                 "lus dans une datasheet PDF vectorielle", "Ctrl+Shift+O")
         self.actionSave = a("Enregistrer", "save", shortcut="Ctrl+S")
         self.actionSaveAs = a("Enregistrer sous...", shortcut="Ctrl+Shift+S")
         self.actionExportCsv = a("Courbes du graphique (CSV)...", "export")
@@ -134,8 +137,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         bar = self.addToolBar("Fichier")
         bar.setMovable(False)
-        for act in (self.actionOpenImage, self.actionPaste, self.actionOpen, self.actionSave,
-                    self.actionPublish):
+        for act in (self.actionImportPdf, self.actionOpenImage, self.actionPaste,
+                    self.actionOpen, self.actionSave, self.actionPublish):
             bar.addAction(act)
         bar = self.addToolBar("Numérisation")
         bar.setMovable(False)
@@ -153,7 +156,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_menus(self):
         menu = self.menuBar().addMenu("&Fichier")
-        for act in (self.actionNew, self.actionOpen, self.actionSave, self.actionSaveAs):
+        for act in (self.actionNew, self.actionOpen, self.actionImportPdf, self.actionSave,
+                    self.actionSaveAs):
             menu.addAction(act)
         menu.addSeparator()
         menu.addAction(self.actionOpenImage)

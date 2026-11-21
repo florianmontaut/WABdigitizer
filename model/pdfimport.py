@@ -1002,7 +1002,7 @@ def to_component(path, found, dpi=200, name=None) -> tuple:
     path = pathlib.Path(path)
     scale = dpi / 72.0
     component = Component(name=name or path.stem)
-    warnings, described, rendered = [], [], {}
+    rendered = {}
     try:
         doc = pdfium.PdfDocument(str(path))
     except Exception as error:            # pypdfium2 : PdfiumError
@@ -1036,8 +1036,7 @@ def to_component(path, found, dpi=200, name=None) -> tuple:
                 x1=_nominal(g.x, xa, xva), x2=_nominal(g.x, xb, xvb),
                 y1=_nominal(g.y, ya, yva), y2=_nominal(g.y, yb, yvb),
                 log_x=g.x.log, log_y=g.y.log)
-            title = g.title
-            graph = Graph(name=title, image=np.ascontiguousarray(image[r0:r1, c0:c1]),
+            graph = Graph(name=g.title, image=np.ascontiguousarray(image[r0:r1, c0:c1]),
                           source=f"{path.name} p.{g.page}")
             for k, title_text in (("x", g.x_title), ("y", g.y_title)):
                 quantity, unit = unit_split(title_text)
@@ -1060,20 +1059,27 @@ def to_component(path, found, dpi=200, name=None) -> tuple:
                 graph.add_dataset()
             graph.set_calibration(calibration)
             component.graphs.append(graph)
-            conditions = [plain(t) for t in g.caption[1:]] + \
-                [t.split(" : ", 1)[1] for t in g.notes if t.startswith("encadré")]
-            if conditions:
-                described.append(f"{title} (p.{g.page}) : " + " ; ".join(conditions))
-            warnings += [f"{title} (p.{g.page}) : {w}" for w in g.warnings]
     finally:
         doc.close()
-    text = [f"Importé de {path.name} : {len(found)} graphique(s)."]
+    component.notes, warnings = import_notes(path.name, found)
+    return component, warnings
+
+
+def import_notes(filename: str, found) -> tuple:
+    """Notes du composant (conditions lues, points à vérifier) et avertissements."""
+    described, warnings = [], []
+    for g in found:
+        conditions = [plain(t) for t in g.caption[1:]] + \
+            [t.split(" : ", 1)[1] for t in g.notes if t.startswith("encadré")]
+        if conditions:
+            described.append(f"{g.title} (p.{g.page}) : " + " ; ".join(conditions))
+        warnings += [f"{g.title} (p.{g.page}) : {w}" for w in g.warnings]
+    text = [f"Importé de {filename} : {len(found)} graphique(s)."]
     if described:
         text += ["", "Conditions lues :"] + [f"- {d}" for d in described]
     if warnings:
         text += ["", "À vérifier :"] + [f"- {w}" for w in warnings]
-    component.notes = "\n".join(text)
-    return component, warnings
+    return "\n".join(text), warnings
 
 
 def import_pdf(path, dpi=200, pages=None) -> tuple:
