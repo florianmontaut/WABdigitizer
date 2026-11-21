@@ -5,6 +5,8 @@ document numérisé (model.document) et aux calculs (calibration, extraction, aj
 """
 import dataclasses
 import pathlib
+import subprocess
+import sys
 import weakref
 
 import numpy as np
@@ -15,13 +17,15 @@ from formules import FormulaError, units
 from qtsocle import options_panel, settings, theme
 from ressources import app_settings
 
-from model import document, export, extraction, fit, mask, plecs
+from model import document, export, extraction, fit, library, mask, plecs
 from model.calibration import (AxisCalibration, CalibrationError, orthogonal_points,
                                to_four_points)
+from model.library import LibraryError
 from model.plecs import PlecsError
 from controller.commands import (CalibrationCommand, InsertCommand, MaskCommand,
                                  PointsCommand, points_state, same_points)
 from controller.compare_controller import CompareController
+from controller.library_controller import LibraryController
 from view.canvas import Mode
 from view.compare_window import CompareWindow
 from view.dialogs import CalibrationDialog, format_value, parse_value
@@ -75,6 +79,7 @@ class MainController(QtCore.QObject):
         # modèles Qt parentés à leur vue : détruits avec elle, dans l'ordre
         self.tree_model = QtGui.QStandardItemModel(view.tree)
         view.tree.setModel(self.tree_model)
+        self.library = LibraryController(view.library, self.options)
 
         # slots en méthodes liées (pas de lambda qui garderait le contrôleur en vie)
         view.actionNew.triggered.connect(self.new_component)
@@ -88,6 +93,13 @@ class MainController(QtCore.QObject):
         view.actionExportComponent.triggered.connect(self.export_component)
         view.actionExportPlecs.triggered.connect(self.export_plecs)
         view.actionCompare.triggered.connect(self.open_compare)
+        view.actionPublish.triggered.connect(self.publish)
+        view.actionLibraryOpen.triggered.connect(self.library_open)
+        view.actionLibraryCompare.triggered.connect(self.library_compare)
+        view.actionLibraryRemove.triggered.connect(self.library_remove)
+        view.actionLibraryReveal.triggered.connect(self.library_reveal)
+        view.actionLibraryReload.triggered.connect(self.library.reload)
+        view.library.table.doubleClicked.connect(self.library_open)
         view.actionCopyTable.triggered.connect(self.copy_table)
         view.actionCopyLut.triggered.connect(self.copy_lut)
         view.actionQuit.triggered.connect(view.close)
@@ -264,12 +276,147 @@ class MainController(QtCore.QObject):
         self.compare.view.raise_()
         self.compare.view.activateWindow()
 
+    # ============================================================ librairie
+    def _library_folder(self) -> pathlib.Path:
+        return pathlib.Path(self.options["library_dir"])
+
+    @staticmethod
+    def _same_file(a, b) -> bool:
+        try:
+            return a is not None and b is not None and \
+                pathlib.Path(a).resolve() == pathlib.Path(b).resolve()
+        except OSError:
+            return False
+
+    def publish(self, *_) -> bool:
+        """
+        Publie le composant ouvert : fiche, projet et description PLECS dans
+        <librairie>/<Catégorie>/<Référence>. Une autre entrée de même référence est
+        remplacée après confirmation (ses fichiers vont dans la corbeille de la librairie).
+        Le projet ouvert devient celui de la librairie s'il n'avait pas de fichier, ou
+        s'il était déjà celui de la librairie.
+        """
+        if not any(g.calibrated and any(len(d.pixels) for d in g.datasets)
+                   for g in self.component.graphs):
+            self.view.error("Publier", "Aucune courbe relevée sur un graphique calibré : "
+                            "rien à publier.")
+            return False
+        folder = self._library_folder()
+        entries, _ = library.scan(folder)
+        try:
+            clash = library.conflicts(entries, folder, self.component)
+        except LibraryError as error:
+            self.view.error("Publier", str(error))
+            return False
+        own = [e for e in clash if self._same_file(e.project_path, self.path)]
+        others = [e for e in clash if e not in own]
+        if others:
+            names = "\n".join(f"- {e.title} : {e.folder}" for e in others)
+            if not self.view.ask("Publier dans la librairie",
+                                 f"La librairie contient déjà :\n{names}\n\nLe remplacer ? "
+                                 "Les fichiers actuels iront dans la corbeille de la librairie "
+                                 f"({library.TRASH})."):
+                return False
+        directory, stem = library.target(folder, self.component)
+        moved = [e for e in own if not (e.folder == directory and e.stem == stem)]
+        try:
+            if others or moved:             # catégorie ou référence changée : ancienne entrée
+                library.remove(others + moved, folder)
+            entry, warnings = library.publish(self.component, folder)
+        except (LibraryError, OSError) as error:
+            self.view.error("Publier", str(error))
+            self.library.reload()
+            return False
+        if self.path is None or own:
+            self.path = entry.project_path
+            self.undo_stack.setClean()
+            self.set_dirty(False)
+        self.library.reload(select=entry.key)
+        if warnings:
+            self.view.error("Publier", f"Publié dans {entry.folder}\n\nÀ vérifier :\n- "
+                            + "\n- ".join(warnings))
+        else:
+            self.view.message(f"Publié : {entry.title} ({entry.folder})", 6000)
+        return True
+
+    def library_open(self, *_) -> bool:
+        """Ouvre le projet du composant choisi dans la librairie."""
+        entries = self.library.selected()
+        if len(entries) != 1:
+            self.view.message("Choisissez un composant dans la librairie", 4000)
+            return False
+        entry = entries[0]
+        if entry.project_path is None:
+            self.view.error("Librairie", f"{entry.title} : fiche sans projet, pas d'image à "
+                            "rouvrir. « Comparer » affiche ses courbes.")
+            return False
+        if self._same_file(entry.project_path, self.path) or not self._ask_discard():
+            return False
+        self.load_project(entry.project_path)
+        return self._same_file(entry.project_path, self.path)
+
+    def library_compare(self, *_) -> int:
+        """Comparateur ouvert sur les courbes des composants choisis."""
+        entries = self.library.selected()
+        if not entries:
+            self.view.message("Choisissez des composants dans la librairie "
+                              "(Ctrl+clic pour plusieurs)", 4000)
+            return 0
+        self.open_compare()
+        return self.compare.show_sources([e.data_path for e in entries])
+
+    def library_remove(self, *_) -> bool:
+        """Met les composants choisis dans la corbeille de la librairie."""
+        entries = self.library.selected()
+        if not entries:
+            return False
+        names = "\n".join(f"- {e.title}" for e in entries[:10])
+        if len(entries) > 10:
+            names += f"\n- ... ({len(entries) - 10} de plus)"
+        if not self.view.ask("Librairie", f"Mettre à la corbeille de la librairie :\n{names}\n\n"
+                             f"Les fichiers sont déplacés dans {library.TRASH}, d'où ils "
+                             "peuvent être récupérés."):
+            return False
+        try:
+            trash = library.remove(entries, self._library_folder())
+        except OSError as error:
+            self.view.error("Librairie", str(error))
+            self.library.reload()
+            return False
+        if any(self._same_file(e.project_path, self.path) for e in entries):
+            self.path = None                # le projet ouvert n'a plus de fichier
+            self.set_dirty(True)
+        self.library.reload()
+        self.view.message(f"{len(entries)} composant(s) dans {trash}", 6000)
+        return True
+
+    def library_reveal(self, *_):
+        """Explorateur sur le fichier du composant choisi, sinon sur la librairie."""
+        entries = self.library.selected()
+        target = entries[0].data_path if entries else self._library_folder()
+        if QtWidgets.QApplication.platformName() == "offscreen":
+            return target
+        if not entries:
+            target.mkdir(parents=True, exist_ok=True)
+        if sys.platform == "win32" and entries:
+            subprocess.Popen(["explorer", f"/select,{target}"])
+        else:
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(
+                str(target if not entries else target.parent)))
+        return target
+
     def edit_options(self):
         dialog = options_panel.OptionsPannel(self.schema, self.options, self.view)
         if dialog.exec():
-            self.options.update(dialog.getOptions())
-            self.view.canvas.set_brush_radius(self.options["brush_radius"])
-            self.save_settings()
+            self.apply_options(dialog.getOptions())
+
+    def apply_options(self, values: dict):
+        previous = self.options.get("library_dir")
+        self.options.update(values)
+        self.view.canvas.set_brush_radius(self.options["brush_radius"])
+        if self.options.get("library_dir") != previous:
+            self.library.reload()
+        self.save_settings()
 
     def save_settings(self):
         settings.save(self.settings_path, self.options)
@@ -459,11 +606,9 @@ class MainController(QtCore.QObject):
             self.view.error("Export PLECS", str(error))
             return False
         if path is None:
-            library = pathlib.Path(self.options["library_dir"])
-            library.mkdir(parents=True, exist_ok=True)
-            name = self.component.part_number or self.component.name or "composant"
-            path, _ = QtWidgets.QFileDialog.getSaveFileName(
-                self.view, "Composant pour PLECS", str(library / f"{name}.xml"), "XML (*.xml)")
+            name = library.safe_name(self.component.part_number or self.component.name) \
+                or "composant"
+            path = self._save_name("Composant pour PLECS", f"{name}.xml", "XML (*.xml)")
             if not path:
                 return False
         export.write_text(path, text)
@@ -475,11 +620,10 @@ class MainController(QtCore.QObject):
         return True
 
     def export_component(self):
-        library = pathlib.Path(self.options["library_dir"])
-        library.mkdir(parents=True, exist_ok=True)
-        name = self.component.part_number or self.component.name or "composant"
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self.view, "Fiche du composant", str(library / f"{name}.json"), "JSON (*.json)")
+        """Fiche seule, hors de la librairie (pour la librairie : Publier)."""
+        name = library.safe_name(self.component.part_number or self.component.name) \
+            or "composant"
+        path = self._save_name("Fiche du composant", f"{name}.json", "JSON (*.json)")
         if path:
             export.write_component(self.component, path)
             self.view.message(f"Fiche écrite : {path}", 5000)

@@ -34,7 +34,8 @@ python -m pytest tests
 4. **Condition** de la courbe (« Tj = 125 °C ») et unités des axes dans le panneau de droite.
 5. **Modèle** (`Ctrl+M`) : formule de x (`a*x^b`, `v0 + r*x + k*x^b`...) ajustée sur les
    points ; courbe du modèle en pointillés sur l'image pour vérification.
-6. **Enregistrer** (`*.pdig.json`, image comprise) et **exporter**.
+6. **Enregistrer** (`*.pdig.json`, image comprise) et **publier** dans la librairie
+   (`Ctrl+Shift+P`).
 
 Clavier (cliquer d'abord dans l'image) :
 
@@ -63,7 +64,7 @@ Méthodes d'extraction :
 |---|---|
 | Courbes du graphique (CSV) | Excel |
 | Grille de X commune (CSV) | tables 2D (PLECS...) |
-| Fiche du composant (JSON, `ParamDigitizer component v1`) | logiciel de dimensionnement : valeurs physiques, unités, conditions, modèles, sans images |
+| Fiche du composant (JSON, `ParamDigitizer component v1`) | logiciel de dimensionnement : valeurs physiques, unités, conditions, modèles, sans images. Fichier isolé ; pour la librairie : Publier |
 | Copier la courbe en table formules | `interp(x; x1; y1; ...)` collé dans une formule |
 | Composant pour PLECS (XML) | description thermique PLECS (`SemiconductorLibrary` 1.1) : pertes en conduction, à la fermeture, à l'ouverture, modèle de Foster |
 
@@ -78,12 +79,40 @@ Méthodes d'extraction :
   automatique) ; options : point (0, 0), ligne 0 V d'énergie nulle, facteur de sécurité
   `Csecu`, modèle thermique de Foster (lignes « R tau »).
 
+## Librairie de composants
+
+Panneau « Librairie » sous la fenêtre (`Ctrl+L` pour l'afficher ou le masquer), menu
+Librairie. Le dossier est l'option Général › « Répertoire de la librairie » (un partage
+réseau pour une librairie commune).
+
+```
+<librairie>/<Catégorie>/<Référence>.json         fiche (lue par le logiciel de dimensionnement)
+<librairie>/<Catégorie>/<Référence>.pdig.json    projet source : image, calibration, masques
+<librairie>/<Catégorie>/<Référence>.xml          description PLECS (si un graphique a un rôle PLECS)
+<librairie>/_corbeille/<date>/...                composants supprimés ou remplacés
+```
+
+- **Publier** (`Ctrl+Shift+P`) : écrit les trois fichiers du composant ouvert. Il faut
+  une référence (ou un nom) ; sans catégorie : « Sans catégorie ». Une autre entrée de
+  même référence est remplacée après confirmation, ses fichiers vont à la corbeille.
+  Un projet sans fichier, ou ouvert depuis la librairie, devient celui de la librairie :
+  republier après une correction met l'entrée à jour sans question, et un changement
+  de catégorie la déplace.
+- **Ouvrir** (double-clic) : le projet source, pour vérifier ou corriger les relevés.
+  Une fiche seule (sans projet, en gris) n'a pas d'image : elle se compare seulement.
+- **Comparer** : le comparateur s'ouvre, les courbes des composants choisis cochées
+  (Ctrl+clic ou Maj+clic pour en choisir plusieurs ; caractéristique la plus partagée).
+- **Mettre à la corbeille**, **Afficher dans l'explorateur**, **Actualiser**.
+- Filtre sur toutes les colonnes ; colonnes triables. Les fichiers rangés à la main
+  (à plat, autres sous-dossiers) sont lus aussi ; un fichier illisible ou une référence
+  en double est signalé sous la table (détail en infobulle).
+
 ## Comparer des composants
 
 Outils › Comparer des composants (`Ctrl+Shift+K`), fenêtre à côté de la numérisation.
 
-- Composants lus : fiches et projets du **répertoire de la librairie** (sous-dossiers
-  compris), fichiers ajoutés à la main, et le composant ouvert.
+- Composants lus : ceux de la **librairie** (fiche, sinon projet : un composant publié
+  n'est lu qu'une fois), fichiers ajoutés à la main, et le composant ouvert.
 - **Caractéristique** : les courbes sont comparables quand leurs axes ont les mêmes
   dimensions physiques, quel que soit le type de composant : VCE(IC) d'un IGBT, VDS(ID)
   d'un MOSFET et VF(IF) d'une diode sont toutes « tension en fonction de courant ». Les

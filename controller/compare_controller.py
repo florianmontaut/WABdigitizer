@@ -10,7 +10,7 @@ import pyqtgraph as pg
 import pyqtgraph.exporters
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from model import compare
+from model import compare, library
 from model.compare import CompareError, Frame
 from model.document import PALETTE
 from view.dialogs import parse_value
@@ -62,10 +62,12 @@ class CompareController(QtCore.QObject):
 
     # ============================================================ sources
     def reload(self):
-        files = compare.library_files(self.options["library_dir"])
+        entries, errors = library.scan(self.options["library_dir"])
+        files = [entry.data_path for entry in entries]
         known = {pathlib.Path(f).resolve() for f in files}
         files += [f for f in self.extra_files if pathlib.Path(f).resolve() not in known]
-        curves, errors = compare.load_files(files)
+        curves, read_errors = compare.load_files(files)
+        errors = errors + read_errors
         sheet = self.current_sheet() if self.current_sheet is not None else None
         if callable(sheet):          # WeakMethod : la référence rend la méthode
             sheet = sheet()
@@ -80,6 +82,31 @@ class CompareController(QtCore.QObject):
         if errors:
             text += f" — {len(errors)} fichier(s) ignoré(s) : " + " ; ".join(errors[:3])
         self.view.message(text)
+
+    def show_sources(self, paths) -> int:
+        """
+        Coche les courbes de ces fichiers (composants choisis dans la librairie), dans la
+        caractéristique que le plus grand nombre d'entre eux partagent. Retourne le nombre
+        de courbes cochées.
+        """
+        self.reload()
+        wanted = {str(pathlib.Path(p).resolve()) for p in paths}
+        curves = [c for c in self.curves if c.source != OPEN_COMPONENT
+                  and str(pathlib.Path(c.source).resolve()) in wanted]
+        if not curves:
+            self.view.message("Aucune courbe à comparer dans ces composants", 5000)
+            return 0
+        sources, counts = {}, {}
+        for curve in curves:
+            sources.setdefault(curve.characteristic, set()).add(curve.source)
+            counts[curve.characteristic] = counts.get(curve.characteristic, 0) + 1
+        best = max(sources, key=lambda k: (len(sources[k]), counts[k]))
+        keys = [c.key for c in curves if c.characteristic == best]
+        self.selected = []
+        self.characteristic = best
+        self.rebuild_characteristics()
+        self.set_checked(keys)
+        return len(keys)
 
     def add_files(self):
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(

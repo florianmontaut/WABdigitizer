@@ -2,6 +2,7 @@
 """
 Fenêtre principale :
     gauche   arborescence du composant (graphiques, courbes)
+    dock     librairie de composants (sous la fenêtre par défaut, déplaçable)
     centre   image à numériser (canevas) puis aperçu des courbes en unités physiques
     droite   paramètres (composant, graphique, courbe, extraction, modèle) puis table XY
 """
@@ -14,6 +15,7 @@ from qtsocle import theme
 
 from . import properties
 from .canvas import ImageCanvas, Mode
+from .library_panel import LibraryPanel
 
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff")
 
@@ -45,6 +47,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setAcceptDrops(True)
         # référence faible vers une fonction -> bool : False annule la fermeture
         self.close_guard = None
+        self.answer = True              # réponse aux questions sans écran (tests)
+        self.last_question = None
         self._build_actions()
         self._build_panels()
         self._build_menus()
@@ -113,9 +117,25 @@ class MainWindow(QtWidgets.QMainWindow):
                                "Courbes de plusieurs composants sur des axes communs",
                                "Ctrl+Shift+K")
 
+        # librairie
+        self.actionPublish = a("Publier dans la librairie", "publish",
+                               "Écrire la fiche, le projet et la description PLECS du "
+                               "composant dans la librairie", "Ctrl+Shift+P")
+        self.actionLibraryOpen = a("Ouvrir le projet", "open",
+                                   "Ouvrir le projet du composant choisi dans la librairie")
+        self.actionLibraryCompare = a("Comparer", "compare",
+                                      "Comparer les composants choisis dans la librairie")
+        self.actionLibraryRemove = a("Mettre à la corbeille", "trash",
+                                     "Déplacer les composants choisis dans la corbeille "
+                                     "de la librairie (_corbeille)")
+        self.actionLibraryReveal = a("Afficher dans l'explorateur", "folder",
+                                     "Ouvrir le dossier du composant choisi, ou de la librairie")
+        self.actionLibraryReload = a("Actualiser", "redo", "Relire le dossier de la librairie")
+
         bar = self.addToolBar("Fichier")
         bar.setMovable(False)
-        for act in (self.actionOpenImage, self.actionPaste, self.actionOpen, self.actionSave):
+        for act in (self.actionOpenImage, self.actionPaste, self.actionOpen, self.actionSave,
+                    self.actionPublish):
             bar.addAction(act)
         bar = self.addToolBar("Numérisation")
         bar.setMovable(False)
@@ -152,6 +172,18 @@ class MainWindow(QtWidgets.QMainWindow):
         for act in (self.actionClearMask, self.actionDetection, self.actionExtract,
                     self.actionFit, self.actionAddCurve, self.actionDelete):
             menu.addAction(act)
+        menu = self.menuBar().addMenu("&Librairie")
+        self.actionLibraryPanel = self.library_dock.toggleViewAction()
+        self.actionLibraryPanel.setText("Panneau de la librairie")
+        self.actionLibraryPanel.setShortcut(QtGui.QKeySequence("Ctrl+L"))
+        theme.set_action_icon(self.actionLibraryPanel, "library")
+        for act in (self.actionLibraryPanel, None, self.actionPublish, self.actionLibraryOpen,
+                    self.actionLibraryCompare, self.actionLibraryRemove, None,
+                    self.actionLibraryReveal, self.actionLibraryReload):
+            if act is None:
+                menu.addSeparator()
+            else:
+                menu.addAction(act)
         menu = self.menuBar().addMenu("&Outils")
         menu.addAction(self.actionCompare)
         menu = self.menuBar().addMenu("&Édition")
@@ -208,6 +240,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.coordinates = QtWidgets.QLabel()
         self.statusBar().addPermanentWidget(self.coordinates)
 
+        self.library = LibraryPanel([self.actionPublish, None, self.actionLibraryOpen,
+                                     self.actionLibraryCompare, self.actionLibraryRemove, None,
+                                     self.actionLibraryReveal, self.actionLibraryReload])
+        dock = QtWidgets.QDockWidget("Librairie", self)
+        dock.setObjectName("library_dock")
+        dock.setWidget(self.library)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.BottomDockWidgetArea, dock)
+        self.resizeDocks([dock], [200], QtCore.Qt.Orientation.Vertical)    # l'image d'abord
+        self.library_dock = dock
+
     # ============================================================ affichage
     def add_history_actions(self, undo: QtGui.QAction, redo: QtGui.QAction):
         """Annuler / Refaire (créées par la pile du contrôleur) : barre et menu Édition."""
@@ -232,6 +274,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def message(self, text: str, timeout: int = 0):
         self.statusBar().showMessage(text, timeout)
+
+    def ask(self, title: str, text: str) -> bool:
+        """Question oui / non. Sans écran : self.answer, la question gardée pour les tests."""
+        if QtWidgets.QApplication.platformName() == "offscreen":
+            self.last_question = text
+            return bool(self.answer)
+        answer = QtWidgets.QMessageBox.question(
+            self, title, text, QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No)
+        return answer == QtWidgets.QMessageBox.StandardButton.Yes
 
     def error(self, title: str, text: str):
         if QtWidgets.QApplication.platformName() == "offscreen":

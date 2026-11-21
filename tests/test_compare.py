@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from model import compare, document, export
+from model import library as lib
 from model.calibration import AxisCalibration
 from model.compare import CompareError, Frame
 
@@ -50,9 +51,10 @@ def library(tmp_path):
 
 def test_lecture_de_la_librairie(library):
     files = compare.library_files(library)
-    assert len(files) == 5                                            # sous-dossier compris
+    assert len(files) == 3                                            # sous-dossier compris
     curves, errors = compare.load_files(files)
     assert sorted(c.component for c in curves) == ["D1", "IGBT1", "IGBT1", "MOS1"]
+    errors = lib.scan(library)[1]                                     # étrangers : signalés
     assert len(errors) == 2 and any("ni fiche ni projet" in e for e in errors)
 
 

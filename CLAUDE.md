@@ -51,14 +51,25 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     `Component.plecs`. Référence : `tests/plecs_reference_PMF75-120.xml`, fichier fait à
     la main par l'utilisateur, que `test_plecs.py` reproduit. Les XSD de l'ancien dépôt
     (générés depuis ce seul exemple) ne sont pas fiables : non utilisés.
+  - `library.py` : librairie de composants (dossier, partageable) :
+    `<librairie>/<Catégorie>/<Référence>` + `.json` (fiche), `.pdig.json` (projet source),
+    `.xml` (PLECS). `scan` (entrées = fichiers de même nom d'un même dossier, métadonnées
+    lues sans décoder les images, erreurs et références en double signalées), `target`,
+    `conflicts`, `publish`, `remove` (vers `_corbeille/<date>/`, jamais de suppression).
+    Repris de CoolingTool (`model/library.py`), en écriture.
   - `compare.py` : comparaison entre composants de tous types. Courbes regroupées par
     dimensions physiques (X, Y) de leurs unités (`formules.units`), sinon par noms des
     grandeurs ; `Frame` : unités communes (celles de la première courbe) ; valeurs au
     curseur et écarts, table sur X communs. Lit fiches et projets via
-    `export.component_dict`.
+    `export.component_dict` ; la librairie par `library.scan` (une fiche ou un projet par
+    composant).
 - `view/compare_window.py` + `controller/compare_controller.py` : fenêtre de comparaison
   non modale, enfant de la fenêtre principale, créée une fois (`MainController.open_compare`),
   composant ouvert lu par `weakref.WeakMethod`, réglages partagés (`options`).
+- `view/library_panel.py` (dock « Librairie » de la fenêtre principale, actions créées
+  par `MainWindow`) + `controller/library_controller.py` (lecture, table filtrée et triée,
+  sélection). Publier, ouvrir, comparer, supprimer : `MainController` (`publish`,
+  `library_*`), questions par `view.ask` (sans écran : `view.answer`, `last_question`).
 - `view/` : `canvas.py` (image en row-major dans une ViewBox à Y inversé : pixels de
   l'image = coordonnées de la vue ; émet pressed / moved / released en pixels),
   `main_window.py`, `properties.py` (groupes du ParameterTree), `dialogs.py`.
@@ -71,7 +82,8 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   (courbes, graphiques). Une action déjà faite à l'écran (glisser, pinceau) est poussée
   au relâchement. Les propriétés (noms, unités, réglages) restent hors de la pile :
   `set_dirty()` ; l'étoile du titre = hors pile ou pile non propre.
-- `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_compare.py`, `test_gui.py`
+- `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_compare.py`,
+  `test_library.py`, `test_gui.py`
   (contrôleurs sans écran).
 
 ## Choix de conception à respecter
@@ -85,12 +97,19 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   vues, slots en méthodes liées ; `view.close_guard` est une `weakref.WeakMethod`.
 - Toute modification des points, de la calibration, du masque ou de la structure passe
   par une commande de la pile (`MainController.push`, `change_points`).
+- Librairie : le projet ouvert devient celui de la librairie à la publication s'il
+  n'avait pas de fichier ou s'il en venait déjà (republier = mise à jour en place, sans
+  question) ; une autre entrée de même référence n'est remplacée qu'après confirmation,
+  et part à la corbeille. Les exports isolés (fiche, PLECS) ne vont plus dans la librairie.
 - Tests d'interface : `dispose(ctrl)` en fin de test ; les boîtes de dialogue ne s'ouvrent
   pas sans écran (`finish_calibration`), les tests appellent `apply_calibration`.
 
 ## Non fait / pistes
 
 - Comparaison : grandeurs dérivées (pertes P = v·i, mise en parallèle de n composants).
+- Librairie : ouverture en lecture seule d'une fiche sans projet ; librairie livrée avec
+  l'exécutable ; suivi des changements du dossier partagé (bouton Actualiser seulement) ;
+  vidage de la corbeille (à la main). Jamais essayée sur un vrai partage réseau.
 
 - Export PLECS : jamais importé dans PLECS lui-même ; classes « IGBT with Diode » /
   « MOSFET with Diode », modèle de Cauer, ajustement de Foster sur une courbe Zth(t).

@@ -7,8 +7,8 @@ Deux courbes sont comparables quand leurs axes ont les mêmes dimensions physiqu
 VF(IF) d'une diode sont toutes une « tension en fonction d'un courant ». Les unités sont
 converties vers celles de la première courbe choisie (mJ / µJ, kA / A...).
 
-Sources : fiches « ParamDigitizer component v1 » (librairie) et projets *.pdig.json,
-lus dans la même forme (model.export.component_dict).
+Sources : fiches « ParamDigitizer component v1 » et projets *.pdig.json (entrées de
+model.library, ou fichiers ajoutés), lus dans la même forme (model.export.component_dict).
 """
 import json
 import pathlib
@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 from formules import units
 
-from . import document, export
+from . import document, export, library
 
 
 class CompareError(ValueError):
@@ -142,11 +142,11 @@ def curves_of(sheet: dict, source: str) -> list:
 
 
 def library_files(folder) -> list:
-    """Fiches et projets du dossier de la librairie (sous-dossiers compris), triés."""
-    folder = pathlib.Path(folder)
-    if not folder.is_dir():
-        return []
-    return sorted(p for p in folder.rglob("*.json") if p.is_file())
+    """
+    Un fichier par composant de la librairie (sous-dossiers compris, corbeille exceptée) :
+    sa fiche, sinon son projet. Un composant publié (fiche + projet) n'est lu qu'une fois.
+    """
+    return [entry.data_path for entry in library.scan(folder)[0]]
 
 
 def load_files(paths) -> tuple:

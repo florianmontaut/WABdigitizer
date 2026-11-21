@@ -596,3 +596,114 @@ def test_option_dans_les_reglages(ctrl):
     texts = [w.text() for w in CalibrationDialog({}, ctrl.view, True).findChildren(
         QtWidgets.QLabel)]
     assert any("origine O" in t for t in texts)
+
+
+# ---------------------------------------------------------------- librairie
+def digitized(ctrl, part="FF600R12", category="IGBT"):
+    """Composant ouvert : un graphique calibré, deux points, référence et catégorie."""
+    calibrated(ctrl)
+    for x, y in [(100, 400), (500, 100)]:
+        ctrl.canvas_pressed(x, y)
+        ctrl.canvas_released(x, y)
+    ctrl.view.params["graph"]["Unité X"] = "A"
+    ctrl.view.params["graph"]["Unité Y"] = "V"
+    ctrl.view.params["component"]["Référence"] = part
+    ctrl.view.params["component"]["Catégorie"] = category
+
+
+def library_rows(ctrl):
+    proxy = ctrl.library.proxy
+    return [proxy.index(row, 1).data() for row in range(proxy.rowCount())]
+
+
+def test_publier_puis_republier(ctrl, tmp_path):
+    folder = tmp_path / "library"
+    ctrl.new_component()
+    assert not ctrl.publish() and "rien à publier" in ctrl.view.last_error
+    digitized(ctrl)
+    assert ctrl.path is None and ctrl.dirty
+    assert ctrl.publish()
+    assert (folder / "IGBT" / "FF600R12.json").is_file()
+    assert ctrl.path == folder / "IGBT" / "FF600R12.pdig.json" and not ctrl.dirty
+    assert library_rows(ctrl) == ["FF600R12"]
+    assert [e.title for e in ctrl.library.selected()] == ["FF600R12"]
+
+    # projet de la librairie : republié sans question, à sa place
+    ctrl.view.params["component"]["Notes"] = "corrigé"
+    ctrl.view.last_question = None
+    assert ctrl.publish() and ctrl.view.last_question is None
+    assert library_rows(ctrl) == ["FF600R12"]
+    assert ctrl.library.selected()[0].notes == "corrigé"
+
+    # catégorie changée : l'entrée suit, l'ancienne va à la corbeille
+    ctrl.view.params["component"]["Catégorie"] = "MOSFET"
+    assert ctrl.publish() and ctrl.view.last_question is None
+    assert ctrl.path == folder / "MOSFET" / "FF600R12.pdig.json"
+    assert not (folder / "IGBT" / "FF600R12.json").exists()
+    assert list((folder / "_corbeille").rglob("FF600R12.json"))
+    assert library_rows(ctrl) == ["FF600R12"]
+
+
+def test_publier_une_reference_deja_presente(ctrl, tmp_path):
+    folder = tmp_path / "library"
+    digitized(ctrl)
+    assert ctrl.publish()
+    ctrl.new_component()
+    digitized(ctrl)                                            # autre projet, même référence
+    ctrl.view.answer = False
+    assert not ctrl.publish() and "déjà" in ctrl.view.last_question
+    assert ctrl.path is None
+    ctrl.view.answer = True
+    assert ctrl.publish()
+    assert len(list((folder / "_corbeille").rglob("FF600R12.pdig.json"))) == 1
+    assert library_rows(ctrl) == ["FF600R12"]
+
+
+def test_ouvrir_comparer_supprimer(ctrl, tmp_path):
+    folder = tmp_path / "library"
+    digitized(ctrl, "A1")
+    assert ctrl.publish()
+    ctrl.new_component()
+    digitized(ctrl, "B2", "MOSFET")
+    assert ctrl.publish()
+    ctrl.new_component()
+    ctrl.library.reload()
+    assert library_rows(ctrl) == ["A1", "B2"]
+
+    ctrl.library.select_keys([e.key for e in ctrl.library.entries.values() if e.title == "A1"])
+    assert ctrl.library_open()
+    assert ctrl.component.part_number == "A1" and ctrl.graph.calibrated
+
+    ctrl.library.select_keys(list(ctrl.library.entries))
+    assert ctrl.library_compare() == 2                         # une courbe par composant
+    assert len(ctrl.compare.selected) == 2
+    assert ctrl.library_reveal() == ctrl.library.selected()[0].sheet_path
+
+    # fiche seule (sans projet) : listée, pas ouvrable
+    from model import export as export_
+    sheet = json.loads((folder / "IGBT" / "A1.json").read_text("utf-8"))
+    sheet["part_number"] = "C3"
+    export_.write_text(folder / "C3.json", json.dumps(sheet))
+    ctrl.library.reload()
+    ctrl.library.select_keys([e.key for e in ctrl.library.entries.values() if e.title == "C3"])
+    assert not ctrl.library_open() and "fiche sans projet" in ctrl.view.last_error
+
+    # corbeille : le projet ouvert (A1) n'a plus de fichier
+    ctrl.library.select_keys([e.key for e in ctrl.library.entries.values() if e.title == "A1"])
+    assert ctrl.library_remove()
+    assert ctrl.path is None and ctrl.dirty
+    assert sorted(library_rows(ctrl)) == ["B2", "C3"]
+    assert ctrl.library.selected() == []
+
+
+def test_changer_de_librairie(ctrl, tmp_path):
+    digitized(ctrl)
+    assert ctrl.publish()
+    other = tmp_path / "partage"
+    ctrl.apply_options({"library_dir": str(other)})
+    assert library_rows(ctrl) == [] and str(other) in ctrl.view.library.status.text()
+    ctrl.view.library.filter.setText("igbt")
+    ctrl.apply_options({"library_dir": str(tmp_path / "library")})
+    assert library_rows(ctrl) == ["FF600R12"]                  # filtre sur la catégorie
+    ctrl.view.library.filter.setText("mosfet")
+    assert library_rows(ctrl) == []
