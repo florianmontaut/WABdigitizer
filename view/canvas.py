@@ -17,6 +17,8 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from view import zoom
+
 
 class Mode(enum.Enum):
     NAVIGATE = "Navigation"
@@ -65,6 +67,7 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
 
         self.view_box = self.addViewBox(lockAspect=True, invertY=True)
         self.view_box.setMenuEnabled(False)
+        zoom.limit_image(self.view_box, None)            # bornée dès la création
         self.image_item = pg.ImageItem(axisOrder="row-major")
         self.image_item.setZValue(-100)
         self.mask_item = pg.ImageItem(axisOrder="row-major")
@@ -113,11 +116,13 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
         if image is None:
             self.image_item.clear()
             self._shape = None
+            zoom.limit_image(self.view_box, None)
             self.set_mask(None)
             self.set_detection(None)
             return
         self._shape = image.shape[:2]
         self.image_item.setImage(image, autoLevels=False, levels=(0, 255))
+        zoom.limit_image(self.view_box, self._shape)       # pas de dézoom infini
         self.view_box.autoRange(padding=0.02)
 
     def set_mask(self, mask: np.ndarray | None):

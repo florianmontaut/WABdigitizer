@@ -11,6 +11,8 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from qtsocle import theme
 
+from view import zoom
+
 
 class CompareWindow(QtWidgets.QMainWindow):
     closing = QtCore.pyqtSignal()
@@ -65,6 +67,7 @@ class CompareWindow(QtWidgets.QMainWindow):
 
         self.plot_widget = pg.PlotWidget()
         self.plot = self.plot_widget.getPlotItem()
+        zoom.limit_empty(self.plot)                      # bornée dès l'ouverture
         self.plot.showGrid(x=True, y=True, alpha=0.3)
         self.legend = self.plot.addLegend(offset=(10, 10))
         self.cursor = pg.InfiniteLine(angle=90, movable=True,

@@ -13,7 +13,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from qtsocle import theme
 
-from . import properties
+from . import properties, zoom
 from .canvas import ImageCanvas, Mode
 from .library_panel import LibraryPanel
 
@@ -215,6 +215,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.preview_plot = self.preview.getPlotItem()
         self.preview_plot.showGrid(x=True, y=True, alpha=0.3)
         self.preview_plot.addLegend(offset=(-10, 10))
+        zoom.limit_empty(self.preview_plot)              # bornée dès l'ouverture
         center = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         center.addWidget(self.canvas)
         center.addWidget(self.preview)

@@ -94,6 +94,14 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   par `MainWindow`) + `controller/library_controller.py` (lecture, table filtrée et triée,
   sélection). Publier, ouvrir, comparer, supprimer : `MainController` (`publish`,
   `library_*`), questions par `view.ask` (sans écran : `view.answer`, `last_question`).
+- `view/zoom.py` (repris de loggerFPGA `logger_app/ressources/zoom.py`) : limites de zoom
+  par `ViewBox.setLimits`, sans quoi un dézoom infini fait planter pyqtgraph. Image :
+  `limit_image` (étendue ≤ 4 × sa plus grande dimension, zoom jusqu'à 2 pixels), dans
+  `ImageCanvas.set_image`. Courbes : `limit_plot` sur les données tracées (marge d'une
+  demi-étendue, log10 sur un axe log), dans `refresh_preview` et le comparateur. Jamais
+  de vue sans limite : vue vide = bornes par défaut (`limit_empty`, [0, 1] dézoomable
+  11 fois ; canevas sans image comme une image de 1000 pixels), posées dès la création
+  des vues (avant tout rafraîchissement).
 - `view/` : `canvas.py` (image en row-major dans une ViewBox à Y inversé : pixels de
   l'image = coordonnées de la vue ; émet pressed / moved / released en pixels),
   `main_window.py`, `properties.py` (groupes du ParameterTree), `dialogs.py`.
@@ -107,7 +115,7 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   (courbes, graphiques). Une action déjà faite à l'écran (glisser, pinceau) est poussée
   au relâchement. Les propriétés (noms, unités, réglages) restent hors de la pile :
   `set_dirty()` ; l'étoile du titre = hors pile ou pile non propre.
-- `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_compare.py`,
+- `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_compare.py`, `test_zoom.py`,
   `test_library.py`, `test_pdfimport.py`, `test_gui.py` (contrôleurs sans écran).
 
 ## Choix de conception à respecter

@@ -14,6 +14,7 @@ from model import compare, library
 from model.compare import CompareError, Frame
 from model.document import PALETTE
 from view.dialogs import parse_value
+from view import zoom
 
 ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
 OPEN_COMPONENT = "composant ouvert"
@@ -242,6 +243,8 @@ class CompareController(QtCore.QObject):
             self.frame = None
             view.message(str(error), 6000)
         if self.frame is None:
+            plot.setLogMode(False, False)
+            zoom.limit_empty(plot)
             plot.setLabel("bottom", "")
             plot.setLabel("left", "")
             self._fill_reference([])
@@ -253,16 +256,20 @@ class CompareController(QtCore.QObject):
         plot.setLabel("bottom", self.frame.x_axis.label())
         plot.setLabel("left", self.frame.y_axis.label())
         components = list(dict.fromkeys(c.source for c in curves))
+        xs, ys = [], []                          # bornes du zoom : données tracées
         for index, curve in enumerate(curves):
             x, y = self.frame.convert(curve)
             if log_x or log_y:
                 keep = ((x > 0) if log_x else True) & ((y > 0) if log_y else True)
                 x, y = x[keep], y[keep]
+            xs.append(x)
+            ys.append(y)
             color = PALETTE[index % len(PALETTE)]
             style = LINE_STYLES[components.index(curve.source) % len(LINE_STYLES)]
             plot.plot(x, y, name=curve.label, pen=pg.mkPen(color, width=2, style=style),
                       symbol="o", symbolSize=4, symbolBrush=color, symbolPen=None)
         plot.addItem(view.cursor, ignoreBounds=True)
+        zoom.limit_plot(plot, xs, ys, log_x, log_y)
         plot.enableAutoRange()
         self._fill_reference(curves)
         if not self._cursor_inside():

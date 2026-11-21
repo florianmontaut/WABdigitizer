@@ -295,6 +295,10 @@ def test_comparateur(ctrl, tmp_path):
 
     cmp.set_checked([keys["IGBT1"], keys["MOS1"], keys["Ouvert"]])
     assert cmp.frame.y_axis.unit == "V" and cmp.frame.x_axis.unit == "A"
+    vb = view.plot.getViewBox()                               # pas de dézoom infini
+    vb.scaleBy((1e12, 1e12))
+    x0, x1 = vb.viewRange()[0]
+    assert x1 - x0 <= 2 * 200 + 1e-6                          # IC de 0 à 200 A
     cmp.set_cursor(100.0)
     assert view.table.rowCount() == 3
     assert view.table.item(0, 2).text() == "référence"

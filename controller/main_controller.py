@@ -27,6 +27,7 @@ from controller.commands import (CalibrationCommand, InsertCommand, MaskCommand,
                                  PointsCommand, points_state, same_points)
 from controller.compare_controller import CompareController
 from controller.library_controller import LibraryController
+from view import zoom
 from view.canvas import Mode
 from view.compare_window import CompareWindow
 from view.dialogs import CalibrationDialog, format_value, parse_value
@@ -1612,6 +1613,7 @@ class MainController(QtCore.QObject):
         graph = self.graph
         if graph is None or not graph.calibrated:
             plot.setLogMode(False, False)
+            zoom.limit_empty(plot)
             plot.setLabel("bottom", "")
             plot.setLabel("left", "")
             plot.setTitle("Aperçu en unités physiques (graphique non calibré)", size="9pt")
@@ -1621,10 +1623,13 @@ class MainController(QtCore.QObject):
         plot.setLogMode(cal.log_x, cal.log_y)
         plot.setLabel("bottom", graph.x_axis.label("X"))
         plot.setLabel("left", graph.y_axis.label("Y"))
+        xs, ys = [], []                          # bornes du zoom : données tracées
         for i, dataset in enumerate(graph.datasets):
             if not dataset.visible or len(dataset) == 0:
                 continue
             data = dataset.data(cal)
+            xs.append(data[:, 0])
+            ys.append(data[:, 1])
             name = dataset.name + (f" ({dataset.condition})" if dataset.condition else "")
             plot.plot(data[:, 0], data[:, 1], pen=pg.mkPen(dataset.color, width=1.5),
                       symbol="o", symbolSize=5, symbolBrush=dataset.color, name=name)
@@ -1633,6 +1638,9 @@ class MainController(QtCore.QObject):
                 values = cal.pixel_to_data(model)
                 plot.plot(values[:, 0], values[:, 1], connect="finite",
                           pen=pg.mkPen(dataset.color, width=1, style=QtCore.Qt.PenStyle.DashLine))
+                xs.append(values[:, 0])
+                ys.append(values[:, 1])
+        zoom.limit_plot(plot, xs, ys, cal.log_x, cal.log_y)
         plot.enableAutoRange()
 
     def refresh_table(self):
