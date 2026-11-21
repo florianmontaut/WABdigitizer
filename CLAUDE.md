@@ -18,7 +18,9 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
 ## Environnement
 
 - Python 3.11, PyQt6 6.4.2, pyqtgraph 0.13.3, numpy, scipy, pytest (`requirements.txt`) ;
-  scikit-image facultatif (méthode « Squelette »).
+  scikit-image facultatif (méthode « Squelette ») ; pdfminer.six + pypdfium2 facultatifs
+  (import PDF), matplotlib pour ses tests. pip du poste : `--use-feature=truststore`
+  (sinon erreur de certificat SSL).
 - Interpréteur du poste : `..\..\env\Scripts\python.exe`.
 - **qtsocle** (dépôt voisin, `pip install -e ..\qtsocle`) : thème, icônes, options,
   démarrage, chemins, exécutable. Ne pas recopier son code ici.
@@ -60,6 +62,18 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   - `sheet.py` : fiche -> `Component` affichable (lecture seule d'une fiche sans projet) :
     image blanche quadrillée (900 × 600) et calibration orthonormée couvrant les données
     (log10 sur un axe log) ; points inaffichables écartés et signalés ; modèles repris.
+  - `pdfimport.py` : import d'une datasheet PDF **vectorielle** (pas d'image, pas d'IA).
+    `analyse` -> `FoundGraph` (coordonnées PDF, y vers le haut) : page aplatie
+    (`flatten`, blocs de dessin parcourus, glyphes dessinés −/Ω remis en texte), cadres
+    par composantes connexes de traits H/V (`find_frames`), texte rattaché au cadre le
+    plus proche, graduations (`tick_labels`, `fit_axis` lin/log, résidu en points),
+    titres d'axes, courbes (`join_fragments` : bouts, puis tirets), étiquettes (légende
+    par couleur / pointillé / épaisseur, sinon texte le plus proche), légendes de
+    figures numérotées (`_match_captions` : toutes dessus ou toutes dessous).
+    `to_component` : image recadrée (pypdfium2, 200 dpi), calibration orthonormée sur
+    les graduations extrêmes, points en pixels ; avertissements dans `Component.notes`.
+    Corpus de mise au point (fichiers de l'utilisateur, jamais versionnés) : voir la
+    mémoire du projet ; `tests/test_pdfimport.py` fabrique ses PDF avec matplotlib.
   - `compare.py` : comparaison entre composants de tous types. Courbes regroupées par
     dimensions physiques (X, Y) de leurs unités (`formules.units`), sinon par noms des
     grandeurs ; `Frame` : unités communes (celles de la première courbe) ; valeurs au
@@ -86,8 +100,7 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   au relâchement. Les propriétés (noms, unités, réglages) restent hors de la pile :
   `set_dirty()` ; l'étoile du titre = hors pile ou pile non propre.
 - `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_compare.py`,
-  `test_library.py`, `test_gui.py`
-  (contrôleurs sans écran).
+  `test_library.py`, `test_pdfimport.py`, `test_gui.py` (contrôleurs sans écran).
 
 ## Choix de conception à respecter
 
@@ -124,7 +137,14 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
 - Export PLECS : jamais importé dans PLECS lui-même ; classes « IGBT with Diode » /
   « MOSFET with Diode », modèle de Cauer, ajustement de Foster sur une courbe Zth(t).
 
-- Détection automatique des axes et de la grille (piste dans le brouillon `test_qpaint.py`).
+- Import PDF (proposition J0–J4, J0 et J1 faits) : commande et fenêtre d'import
+  (choix des graphiques, nouveau composant, commande de la pile) ; sens (référence,
+  fabricant, rôles PLECS, plages « 6~18 V, 2 V step ») ; repli image (calibration
+  automatique sur une image incorporée quand les graduations sont du texte). Faible sur
+  les datasheets anciennes tout en noir (FF300R12KT4) ; lettres italiques dessinées
+  (conditions « _j=25 °C ») ; caractères sans Unicode (« ¤ »).
+- Détection automatique des axes d'une image (raster) : piste dans le brouillon
+  `test_qpaint.py`.
 - Loupe de pointage (WPD), courbes non fonctionnelles (hystérésis) : l'extraction trie par X.
 - Intégration au logiciel de dimensionnement : par la fiche JSON (aucun import de code).
   Les paquets `model` / `view` / `controller` ont des noms génériques : à renommer

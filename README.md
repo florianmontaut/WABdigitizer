@@ -58,6 +58,37 @@ Méthodes d'extraction :
 | Grille de X imposée | points aux X de la grille du graphique, commune à toutes ses courbes ; interpolation dans l'espace log sur un axe log |
 | Squelette | squelette des pixels, simplifié (Douglas-Peucker) |
 
+## Import d'une datasheet PDF (en cours)
+
+Le module `model/pdfimport.py` lit les graphiques d'une datasheet **vectorielle** (la
+plupart des datasheets récentes) dans les tracés et le texte du PDF, sans passer par une
+image, et en fait un composant brouillon. La commande de l'interface n'existe pas encore.
+
+```
+from model import pdfimport, document
+component, warnings = pdfimport.import_pdf("datasheet.pdf")
+document.save(component, "datasheet.pdig.json")      # s'ouvre dans l'application
+```
+
+- **Graphiques** : repérés par leur cadre et leur grille ; image = diagramme rendu
+  (200 dpi) et recadré.
+- **Calibration** automatique : graduations lues (exposants 10^n, virgule décimale, axes
+  log), ajustement sur toutes les graduations ; repères posés sur les graduations
+  extrêmes.
+- **Courbes** : sommets exacts du PDF (pas de rééchantillonnage), morceaux et pointillés
+  recollés. Nom et condition : étiquette posée près de la courbe, ou entrée de légende
+  rapprochée par la couleur, le pointillé, l'épaisseur. Température lue (« Tj = 25 °C »).
+- **Titres d'axes** (grandeur et unité) et **légende de la figure** (« Figure 7. ... »)
+  pour le nom du graphique ; conditions lues et avertissements dans les notes du
+  composant.
+
+Limites : PDF scanné ou graphiques en image (non lus, signalés) ; courbes de même style
+sans étiquette (à nommer) ; étiquettes de plage (« VGS = 6~18 V, 2 V step ») ;
+datasheets anciennes tout en noir à pointillés dessinés tiret par tiret (FF300R12KT4) :
+calibration juste, courbes et étiquettes à reprendre.
+
+Paquets facultatifs : `pdfminer.six`, `pypdfium2` (et `matplotlib` pour les tests).
+
 ## Exports
 
 | Export | Pour |

@@ -15,6 +15,10 @@ numpy>=1.26
 scipy>=1.11
 # facultatif : méthode d'extraction « Squelette »
 scikit-image>=0.21
+# facultatif : import de datasheets PDF vectorielles (model/pdfimport.py)
+pdfminer.six>=20231228
+pypdfium2>=4.30
+matplotlib>=3.8          # tests de l'import PDF (PDF fabriqués)
 # tests et exécutable
 pytest>=8
 pyinstaller>=6
