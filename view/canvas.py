@@ -28,6 +28,7 @@ class Mode(enum.Enum):
     PAINT = "Pinceau du masque"
     ERASE = "Gomme du masque"
     PICK = "Pipette (couleur de la courbe)"
+    FOLLOW = "Suivre la courbe"
 
 
 CURSORS = {
@@ -38,6 +39,7 @@ CURSORS = {
     Mode.PAINT: QtCore.Qt.CursorShape.BlankCursor,
     Mode.ERASE: QtCore.Qt.CursorShape.BlankCursor,
     Mode.PICK: QtCore.Qt.CursorShape.CrossCursor,
+    Mode.FOLLOW: QtCore.Qt.CursorShape.CrossCursor,
 }
 
 MASK_RGBA = (255, 200, 0, 255)

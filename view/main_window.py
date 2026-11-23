@@ -99,7 +99,8 @@ class MainWindow(QtWidgets.QMainWindow):
                                      (Mode.DELETE, "point_remove", "D"),
                                      (Mode.PAINT, "brush", "B"),
                                      (Mode.ERASE, "eraser", "E"),
-                                     (Mode.PICK, "pipette", "P")):
+                                     (Mode.PICK, "pipette", "P"),
+                                     (Mode.FOLLOW, "follow", "F")):
             act = a(mode.value, icon_name, f"{mode.value} ({key})", key, checkable=True)
             act.setData(mode)
             self.modeGroup.addAction(act)

@@ -120,7 +120,10 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     `name_curves` : légende (appariement par longueur de tirets puis ordre vertical,
     `_match_legend` ; mot de légende orphelin -> dernière courbe libre), étiquettes à
     trait de rappel (`_leader_target` / `_follow` : trait prolongé morceau par morceau
-    au-delà des courbes qu'il croise), sinon proximité.
+    au-delà des courbes qu'il croise), sinon proximité. `follow(image, clic, tolérance)` :
+    outil « Suivre la courbe » (couleur la plus foncée ou vive à 8 px du clic, encre à
+    `tolérance` RGB, pas d'une épaisseur avec inertie de direction, trous jusqu'à
+    `max_gap`, arrêt à un coude de plus de 60°) -> (polyligne, couleur).
   - `labelread.py` : lecture des petits textes d'une image sans moteur d'OCR : caractères
     (composantes connexes, points de i / j et barres de « = » rattachés ; « . », « - »,
     « = », « ° » par leur forme ; indices par la taille) comparés aux modèles des polices
@@ -175,6 +178,8 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   courbes sélectionnées d'un même graphique (arborescence en sélection multiple) -> la
   première, morceaux reliés par `extraction.chain`, masques réunis (macro).
   `rebuild_tree` : met à jour sur place quand la structure est la même (pas de saut).
+  `follow_curve` (mode `Mode.FOLLOW`, touche F) : remplace les points de la courbe choisie,
+  ou les complète bout à bout (Maj, `extraction.chain`) ; couleur de la courbe retenue.
 - `controller/commands.py` : annuler / refaire (`QUndoStack` du contrôleur, mécanisme de
   GLviewer, sans son code). Commandes par instantanés avant / après, objets désignés par
   référence : `PointsCommand` (points + modèle ; flèches fusionnées par `mergeWith`),
@@ -227,8 +232,8 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   lues ; étiquettes à trait de rappel d'un réseau dense mal suivies (d'où l'attribution
   par l'ordre du courant) ; légendes à trait de rappel (Fig. 5 IMW) ; courbes qui se
   touchent longtemps (réseau de sortie près de l'origine) ou
-  presque superposées (temps de commutation) mal séparées ; outil « suivre la courbe au
-  clic » à faire ; relevé et noms ~0,35 s par graphique (à paralléliser si besoin) ; unités des
+  presque superposées (temps de commutation) mal séparées (à reprendre par « Suivre la
+  courbe ») ; relevé et noms ~0,35 s par graphique (à paralléliser si besoin) ; unités des
   axes devinées seulement pour V, A, °C, W. Faible sur
   les datasheets anciennes tout en noir (FF300R12KT4 : pointillés tiret par tiret,
   légendes sans numéro, Ω de la police Symbol lu « W ») ; caractères sans Unicode

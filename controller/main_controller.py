@@ -18,7 +18,8 @@ from formules import FormulaError, units
 from qtsocle import options_panel, settings, theme
 from ressources import app_settings
 
-from model import document, export, extraction, fit, library, mask, pdfimport, plecs, sheet
+from model import (curvetrace, document, export, extraction, fit, library, mask, pdfimport,
+                   plecs, sheet)
 from model.calibration import (AxisCalibration, CalibrationError, orthogonal_points,
                                to_four_points)
 from model.library import LibraryError
@@ -964,6 +965,9 @@ class MainController(QtCore.QObject):
             Mode.PAINT: "Peindre la zone de la courbe, puis Extraire (Ctrl+E)",
             Mode.ERASE: "Gommer le masque",
             Mode.PICK: "Clic sur la courbe : couleur recherchée par l'extraction",
+            Mode.FOLLOW: ("Clic sur la courbe : elle est suivie dans les deux sens et remplace "
+                          "les points de la courbe choisie ; Maj+clic : ajoute le morceau "
+                          "suivi (après un coude)"),
         }[mode]
 
     # ============================================================ souris sur l'image
@@ -1020,6 +1024,10 @@ class MainController(QtCore.QObject):
             self.mask_before = graph.mask_of(self.dataset).copy()
             self.last_paint = (x, y)
             self._paint((x, y), (x, y))
+        elif mode == Mode.FOLLOW:
+            add = bool(QtWidgets.QApplication.keyboardModifiers()
+                       & QtCore.Qt.KeyboardModifier.ShiftModifier)
+            self.follow_curve(x, y, add)
         elif mode == Mode.PICK:
             row, col = int(y), int(x)
             if (self.dataset is not None and 0 <= row < graph.image.shape[0]
@@ -1452,6 +1460,40 @@ class MainController(QtCore.QObject):
         unmasked = "" if self.dataset.mask is not None and self.dataset.mask.any() else \
             " (sans masque : toute l'image a été parcourue)"
         self.view.message(f"{len(points)} points extraits{unmasked}", 6000)
+
+    def follow_curve(self, x, y, add=False) -> bool:
+        """
+        Outil « Suivre la courbe » : la courbe sous le clic, suivie dans les deux sens
+        (`curvetrace.follow`), remplace les points de la courbe choisie, ou s'y ajoute bout
+        à bout (add : Maj+clic, après un coude). Une étape d'annulation.
+        """
+        if not self._editable():
+            return False
+        graph = self.graph
+        if graph is None or graph.image is None:
+            return False
+        if self.dataset is None:
+            self.add_dataset()
+        dataset = self.dataset
+        points, color = curvetrace.follow(graph.image, (x, y), dataset.tolerance)
+        if len(points) < 2:
+            self.view.message("Pas de courbe sous le clic : cliquez sur le trait", 5000)
+            return False
+        if add and len(dataset):
+            def change(d):
+                d.pixels = extraction.chain([d.pixels, points])
+                d.fit = None
+            text = "Suivre la courbe (ajout)"
+        else:
+            def change(d):
+                d.pixels = points.copy()
+                d.fit = None
+            text = "Suivre la courbe"
+        self.change_points(text, change)
+        if color is not None and not add:
+            dataset.curve_color = color
+        self.view.message(f"{text} : {len(points)} points (couleur RGB{color})", 5000)
+        return True
 
     # ============================================================ modèle
     def fit_model(self):

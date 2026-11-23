@@ -981,3 +981,25 @@ def test_chainage_des_morceaux():
     assert chain([]).shape == (0, 2)
     out = chain([[(5, 0), (6, 0)], [(2, 0), (0, 0)], [(3, 1), (4, 1)]])
     assert np.allclose(out[:, 0], [0, 2, 3, 4, 5, 6])
+
+
+def test_suivre_la_courbe_au_clic(ctrl):
+    graph = calibrated(ctrl)                             # droite rouge y = 2x + 3
+    ctrl.set_mode(Mode.FOLLOW)
+    count = ctrl.undo_stack.count()
+    # (clic du canevas -> follow_curve, Maj lue au clic : appelé directement ici, l'état
+    # des touches laissé par d'autres tests n'y entre pas)
+    assert ctrl.follow_curve(300, 400 - (2 * 5 + 3) * 10)   # x = 5 sur la droite
+    assert ctrl.undo_stack.count() == count + 1
+    data = ctrl.dataset.data(graph.calibration)
+    assert len(data) > 20 and np.ptp(data[:, 0]) > 7     # de bout en bout (x de 1 à 9)
+    assert np.abs(data[:, 1] - (2 * data[:, 0] + 3)).max() < 0.3
+    assert ctrl.dataset.curve_color[0] > 150             # rouge, pris sous le clic
+    before = len(ctrl.dataset)
+    assert not ctrl.follow_curve(560, 40)                # fond : rien, message
+    assert len(ctrl.dataset) == before
+    assert ctrl.follow_curve(200, 400 - (2 * 2.5 + 3) * 10, add=True)   # ajout bout à bout
+    assert len(ctrl.dataset) > 1.9 * before                  # les deux suivis, enchaînés
+    ctrl.undo_stack.undo()
+    ctrl.undo_stack.undo()
+    assert len(ctrl.dataset) == 0

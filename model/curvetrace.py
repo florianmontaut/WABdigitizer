@@ -653,3 +653,114 @@ def _follow(pts, all_pts, origin, width):
     _, _, vt = np.linalg.svd(pts - center, full_matrices=False)
     direction = vt[0] if np.dot(center - origin, vt[0]) >= 0 else -vt[0]
     return center + ((pts - center) @ direction).max() * direction
+
+
+# ================================================================ suivi depuis un clic
+TURN = 0.5              # cosinus de l'angle maximal entre deux pas (60°) : au-delà, coude
+
+
+def follow(image: np.ndarray, seed, tolerance: float = 120.0, max_gap: float | None = None):
+    """
+    Courbe suivie depuis un clic (outil « Suivre la courbe ») : (polyligne (n, 2) en
+    pixels, couleur RGB) ; polyligne vide si rien n'est trouvé près du clic.
+    Couleur : la plus foncée ou la plus vive près du clic ; encre : pixels à moins de
+    `tolerance` (distance RGB) de cette couleur. Le suivi avance par pas d'une épaisseur
+    dans les deux sens en gardant sa direction (croisements traversés), franchit les trous
+    des tirets (jusqu'à `max_gap` pixels) et s'arrête à un coude brusque (bord du cadre,
+    autre courbe) ou au bord de l'image.
+    """
+    rgb = np.asarray(image, dtype=float)[:, :, :3]
+    H, W = rgb.shape[:2]
+    x, y = int(round(seed[0])), int(round(seed[1]))
+    if not (0 <= x < W and 0 <= y < H):
+        return np.empty((0, 2)), None
+    # couleur : la plus foncée ou la plus vive à 8 pixels du clic (un clic un peu à côté
+    # de la courbe, près d'un trait de grille plus clair, retient la courbe)
+    r = 8
+    win = rgb[max(y - r, 0):y + r + 1, max(x - r, 0):x + r + 1].reshape(-1, 3)
+    strength = (255 - win.mean(axis=1)) + (win.max(axis=1) - win.min(axis=1))
+    color = win[int(np.argmax(strength))]
+    if strength.max() < 60:                # clic sur le fond
+        return np.empty((0, 2)), None
+    mask = np.sqrt(((rgb - color) ** 2).sum(axis=2)) <= tolerance
+    near = mask[max(y - 60, 0):y + 61, max(x - 60, 0):x + 61]
+    width = stroke_width(near) if near.any() else 2.0
+    if max_gap is None:
+        max_gap = max(0.04 * max(H, W), 6 * width)
+    # départ : encre la plus proche du clic, recentrée sur le trait
+    ys, xs = np.nonzero(mask[max(y - 15, 0):y + 16, max(x - 15, 0):x + 16])
+    if not len(xs):
+        return np.empty((0, 2)), None
+    xs, ys = xs + max(x - 15, 0), ys + max(y - 15, 0)
+    k = int(np.argmin(np.hypot(xs - x, ys - y)))
+    start = _centroid(mask, np.array([xs[k], ys[k]], float), max(width, 2.0))
+    # direction : axe principal de l'encre autour du départ
+    ys, xs = np.nonzero(mask[max(int(start[1]) - int(3 * width) - 2, 0):
+                             int(start[1]) + int(3 * width) + 3,
+                             max(int(start[0]) - int(3 * width) - 2, 0):
+                             int(start[0]) + int(3 * width) + 3])
+    pts = np.column_stack([xs + max(int(start[0]) - int(3 * width) - 2, 0),
+                           ys + max(int(start[1]) - int(3 * width) - 2, 0)]).astype(float)
+    if len(pts) >= 3:
+        _, _, vt = np.linalg.svd(pts - pts.mean(axis=0), full_matrices=False)
+        direction = vt[0]
+    else:
+        direction = np.array([1.0, 0.0])
+    if direction[0] < 0:
+        direction = -direction             # vers la droite d'abord
+    ahead = _walk(mask, start, direction, width, max_gap)
+    behind = _walk(mask, start, -direction, width, max_gap)
+    points = np.vstack([behind[::-1], [start], ahead]) if len(behind) or len(ahead) \
+        else np.array([start])
+    if points[0, 0] > points[-1, 0]:
+        points = points[::-1]              # de gauche à droite
+    return points, tuple(int(v) for v in color)
+
+
+def _centroid(mask, p, radius):
+    """Centre de l'encre dans un disque autour de p (p si aucune encre)."""
+    H, W = mask.shape
+    r = int(np.ceil(radius))
+    x0, x1 = max(int(p[0]) - r, 0), min(int(p[0]) + r + 1, W)
+    y0, y1 = max(int(p[1]) - r, 0), min(int(p[1]) + r + 1, H)
+    if x0 >= x1 or y0 >= y1:
+        return p
+    ys, xs = np.nonzero(mask[y0:y1, x0:x1])
+    xs, ys = xs + x0, ys + y0
+    inside = np.hypot(xs - p[0], ys - p[1]) <= radius
+    if not inside.any():
+        return p
+    return np.array([xs[inside].mean(), ys[inside].mean()])
+
+
+def _walk(mask, start, direction, width, max_gap) -> np.ndarray:
+    """Pas successifs dans une direction (inertie) ; trous franchis ; arrêt aux coudes."""
+    H, W = mask.shape
+    step = max(width, 2.0)
+    radius = max(0.75 * width, 1.5)
+    p, d = np.asarray(start, float), np.asarray(direction, float)
+    out = []
+    for _ in range(int(4 * (H + W) / step)):
+        found = None
+        for k in range(1, int(max_gap / step) + 2):
+            q = p + d * step * k
+            if not (0 <= q[0] < W and 0 <= q[1] < H):
+                break
+            c = _centroid(mask, q, radius + 0.1 * k * step)
+            if c is not q:
+                found = c
+                break
+        if found is None:
+            break
+        nd = found - p
+        norm = np.hypot(*nd)
+        if norm < 0.5:
+            break
+        nd = nd / norm
+        if float(np.dot(nd, d)) < TURN:
+            break                          # coude brusque : bord du cadre, autre courbe
+        d = 0.6 * d + 0.4 * nd
+        d = d / np.hypot(*d)
+        p = found
+        out.append(p)
+    return np.array(out).reshape(-1, 2)

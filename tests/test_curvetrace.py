@@ -128,3 +128,24 @@ def test_lecture_des_mots():
         word = reader.read((cols[0] - 4, band[0] - 4, cols[-1] + 5, band[-1] + 5))
         read.append(word.text if word else None)
     assert read == texts
+
+
+def test_suivi_au_clic():
+    """Clic sur la droite en tirets : suivie de bout en bout, trous franchis."""
+    image, _ = chart()
+    area = plotimage.find_plot(image)
+    (ox, oy), (x2, _), (_, y2) = area.markers()
+
+    def pixel(x, y):
+        return ox + x / 6 * (x2 - ox), oy + y / 60 * (y2 - oy)
+    points, color = curvetrace.follow(image, pixel(3.0, 4 * 3.0 + 5))
+    assert color == (0, 0, 0)
+    x, y = to_data(area, points)
+    assert x.min() < 0.6 and x.max() > 5.6               # de bout en bout
+    assert np.abs(y - (4 * x + 5))[x > 0.5].max() < 0.8
+    # clic sur la droite pleine : elle seule
+    points, _ = curvetrace.follow(image, pixel(4.0, 8 * 4.0 + 5))
+    x, y = to_data(area, points)
+    assert np.abs(y - (8 * x + 5))[x > 0.5].max() < 0.8
+    # clic dans le vide
+    assert len(curvetrace.follow(image, pixel(5.0, 5.0))[0]) == 0

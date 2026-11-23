@@ -31,6 +31,10 @@ python -m pytest tests
    - ou automatiquement : pinceau (`B`) le long de la courbe, pipette (`P`) sur la courbe
      (ou « Couleur dominante du masque »), puis **Extraire** (`Ctrl+E`). L'œil affiche
      les pixels retenus.
+   - ou **Suivre la courbe** (`F`) : un clic sur la courbe la suit dans les deux sens
+     (croisements traversés, trous des tirets et pointillés franchis, arrêt aux coudes)
+     et remplace ses points ; `Maj+clic` ajoute le morceau suivi bout à bout (flanc
+     vertical d'une SOA après le coude). Toute image, pas seulement les imports PDF.
    - deux courbes relevées comme une seule (allers-retours en dents de scie) : peindre au
      pinceau les points de l'une, puis **Séparer les points du masque** (`Ctrl+Shift+X`) :
      ils forment une nouvelle courbe (une seule étape d'annulation).
