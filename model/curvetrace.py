@@ -60,6 +60,7 @@ class TraceResult:
     width: float = 0.0                    # épaisseur des courbes, pixels
     words: list = field(default_factory=list)   # boîtes des textes du cadre (x0, y0, x1, y1)
     labels: list = field(default_factory=list)  # textes lus hors légende (étiquettes)
+    ink: np.ndarray | None = field(default=None, repr=False)   # encre du cadre (pour nommer)
     label_boxes: list = field(default_factory=list)  # leurs boîtes
 
 
@@ -75,8 +76,10 @@ class _Track:
         if n == 1:
             return self.ys[-1], 0.0
         k = min(n, 8)
-        xs, ys = np.array(self.xs[-k:], float), np.array(self.ys[-k:], float)
-        slope = np.polyfit(xs, ys, 1)[0] if np.ptp(xs) > 0 else 0.0
+        xs, ys = self.xs[-k:], self.ys[-k:]
+        mx, my = sum(xs) / k, sum(ys) / k             # pente des moindres carrés
+        sxx = sum((a - mx) ** 2 for a in xs)
+        slope = (sum((a - mx) * (b - my) for a, b in zip(xs, ys)) / sxx) if sxx > 0 else 0.0
         return self.ys[-1] + slope * (x - self.xs[-1]), slope
 
     def add(self, x, y, thick):
@@ -101,9 +104,14 @@ def ink_threshold(gray: np.ndarray, area) -> float:
 
 def ink_mask(image: np.ndarray, area) -> tuple:
     """(encre des courbes dans le cadre, gris) : bords du cadre exclus."""
-    rgb = np.asarray(image, dtype=float)[:, :, :3]
-    gray = rgb.mean(axis=2)
-    chroma = rgb.max(axis=2) - rgb.min(axis=2)
+    rgb = np.asarray(image)[:, :, :3]
+    if rgb.dtype == np.uint8:              # entiers : même résultat, plus rapide
+        gray = rgb.sum(axis=2, dtype=np.uint16) / 3.0
+        chroma = rgb.max(axis=2).astype(np.int16) - rgb.min(axis=2)
+    else:
+        rgb = rgb.astype(float)
+        gray = rgb.mean(axis=2)
+        chroma = rgb.max(axis=2) - rgb.min(axis=2)
     mask = (gray < ink_threshold(gray, area)) | (chroma > 80)
     out = np.zeros_like(mask)
     l, t, r, b = area.frame
@@ -112,17 +120,17 @@ def ink_mask(image: np.ndarray, area) -> tuple:
 
 
 def _run_lengths(mask: np.ndarray) -> np.ndarray:
-    """Longueur, en chaque pixel d'encre, de sa tache verticale (0 hors encre)."""
-    out = np.zeros(mask.shape, np.int32)
-    for c, col in enumerate(mask.T):
-        idx = np.flatnonzero(col)
-        if len(idx):
-            cuts = np.flatnonzero(np.diff(idx) > 1)
-            starts = np.r_[0, cuts + 1]
-            ends = np.r_[cuts, len(idx) - 1]
-            for a, b in zip(starts, ends):
-                out[idx[a]:idx[b] + 1, c] = b - a + 1
-    return out
+    """Longueur, en chaque pixel d'encre, de sa tache verticale (0 hors encre) ; vectorisé."""
+    mask = np.asarray(mask, bool)
+    H = mask.shape[0]
+    rows = np.arange(H)[:, None]
+    prev = np.zeros_like(mask)
+    prev[1:] = mask[:-1]
+    nxt = np.zeros_like(mask)
+    nxt[:-1] = mask[1:]
+    start = np.maximum.accumulate(np.where(mask & ~prev, rows, -1), axis=0)
+    end = np.minimum.accumulate(np.where(mask & ~nxt, rows, H)[::-1], axis=0)[::-1]
+    return np.where(mask, end - start + 1, 0).astype(np.int32)
 
 
 def stroke_width(mask: np.ndarray) -> float:
@@ -281,10 +289,13 @@ def _sweep(mask, width, span, lo, hi) -> list:
 
 def _samples(points, shape) -> tuple:
     """Pixels (lignes, colonnes) de la polyligne, au pas d'un pixel."""
+    points = np.asarray(points, dtype=float)
     seg = np.diff(points, axis=0)
     n = np.maximum(np.ceil(np.hypot(seg[:, 0], seg[:, 1])).astype(int), 1)
-    samples = np.vstack([points[i] + np.outer(np.arange(k) / k, seg[i])
-                         for i, k in enumerate(n)] + [points[-1:]])
+    which = np.repeat(np.arange(len(n)), n)            # vectorisé : segment de chaque pas
+    step = np.arange(n.sum()) - np.repeat(np.cumsum(n) - n, n)
+    t = step / np.repeat(n, n)
+    samples = np.vstack([points[which] + t[:, None] * seg[which], points[-1:]])
     r = np.clip(np.round(samples[:, 1]).astype(int), 0, shape[0] - 1)
     c = np.clip(np.round(samples[:, 0]).astype(int), 0, shape[1] - 1)
     return r, c
@@ -365,7 +376,13 @@ def _paint(shape, polylines, radius) -> np.ndarray:
         r, c = _samples(points, shape)
         painted[r, c] = True
     k = int(2 * radius + 1)
-    return ndimage.binary_dilation(painted, np.ones((k, k), bool))
+    return _dilate(painted, k)
+
+
+def _dilate(mask, k) -> np.ndarray:
+    """Dilatation par un carré k × k (bord à zéro) : filtre maximum séparable, rapide."""
+    return ndimage.maximum_filter(mask.astype(np.uint8), size=k, mode="constant",
+                                  cval=0).astype(bool)
 
 
 def _join(flat, steep, width) -> list:
@@ -403,6 +420,7 @@ def trace(image: np.ndarray, area) -> TraceResult:
     l, t, r, b = area.frame
     char = area.char or 20
     ink, gray = ink_mask(image, area)
+    result_ink = ink
     mask, words = remove_text(ink, char)
     width = stroke_width(mask)
     # traits fins (rappels d'étiquettes) retirés avant le suivi, qui sinon passerait du
@@ -413,7 +431,7 @@ def trace(image: np.ndarray, area) -> TraceResult:
         yy, xx = np.mgrid[:k, :k] - (k - 1) / 2
         mask = ndimage.binary_opening(mask, (xx ** 2 + yy ** 2) <= (k / 2) ** 2)
     span = r - l
-    grown = ndimage.binary_dilation(ink, np.ones((3, 3), bool))
+    grown = _dilate(ink, 3)
     dark = ndimage.minimum_filter(gray, size=3)
     # colonne par colonne
     found = [(p, w) for p, w in _sweep(mask, width, span, l + 3, r - 3)
@@ -426,7 +444,7 @@ def trace(image: np.ndarray, area) -> TraceResult:
               if w >= THIN * width]
     shades = [_darkness(p, dark, grown) for p, _, _ in tracks]
     darkest = min(shades) if shades else 0.0
-    result = TraceResult(width=width, words=words)
+    result = TraceResult(width=width, words=words, ink=result_ink)
     flat, raised = [], []
     for (p, w, is_steep), shade in zip(tracks, shades):
         # échantillon de légende : trait court et plat, juste à gauche d'un texte
@@ -531,8 +549,9 @@ def name_curves(result: TraceResult, image: np.ndarray, area, symbols=()) -> lis
     l, t, r, b = area.frame
     painted = _paint(gray.shape, [c.points for c in curves], result.width + 1) if curves \
         else np.zeros(gray.shape, bool)
-    ink, _ = ink_mask(image, area)
+    ink = result.ink if result.ink is not None else ink_mask(image, area)[0]
     rest = ink & ~painted
+    components = ndimage.label(rest, structure=np.ones((3, 3)))
     for box in words:
         if box in used_words:
             continue
@@ -542,7 +561,7 @@ def name_curves(result: TraceResult, image: np.ndarray, area, symbols=()) -> lis
         result.labels.append(word.text)
         result.label_boxes.append(box)
         x0, y0, x1, y1 = box
-        target = _leader_target(rest, box, curves, char, result.width)
+        target = _leader_target(rest, box, curves, char, result.width, components)
         source = "étiquette"
         if target is None:
             cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
@@ -584,7 +603,7 @@ def _match_legend(entries, curves):
             free[j].label, free[j].label_source = entries[i][1].text, "légende"
 
 
-def _leader_target(rest, box, curves, char, width):
+def _leader_target(rest, box, curves, char, width, components=None):
     """
     Courbe désignée par le trait de rappel qui part du texte (None sans trait) : le trait
     est prolongé en ligne droite au-delà des courbes qu'il croise, jusqu'à son vrai bout.
@@ -595,7 +614,8 @@ def _leader_target(rest, box, curves, char, width):
     m = int(max(3, 1.0 * char))            # le trait commence à quelques pixels du texte
     window = np.zeros(rest.shape, bool)
     window[max(y0 - m, 0):y1 + m, max(x0 - m, 0):x1 + m] = True
-    labels, n = ndimage.label(rest, structure=np.ones((3, 3)))
+    labels, n = components if components is not None else \
+        ndimage.label(rest, structure=np.ones((3, 3)))
     if not n:
         return None
     touching = set(np.unique(labels[window & rest])) - {0}

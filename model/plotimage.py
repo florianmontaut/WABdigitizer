@@ -77,14 +77,36 @@ def _runs(mask: np.ndarray, gap: int = 1) -> list:
     return list(zip(starts.tolist(), ends.tolist()))
 
 
+def _longest_runs(mask: np.ndarray, minimum: float) -> list:
+    """
+    Par ligne, la plus longue suite de True (trous d'un pixel comblés, comme `_runs`) d'au
+    moins `minimum` pixels : [(ligne, début, fin)], fin incluse. Calcul vectorisé, toutes
+    les lignes d'un coup.
+    """
+    mask = np.asarray(mask, bool)
+    if not mask.size:
+        return []
+    filled = mask.copy()
+    filled[:, 1:-1] |= mask[:, :-2] & mask[:, 2:]
+    padded = np.zeros((mask.shape[0], mask.shape[1] + 2), np.int8)
+    padded[:, 1:-1] = filled
+    step = np.diff(padded, axis=1)
+    rows, starts = np.nonzero(step == 1)
+    _, ends = np.nonzero(step == -1)          # même ordre (ligne, colonne) que les débuts
+    lengths = ends - starts
+    keep = lengths >= minimum
+    rows, starts, ends, lengths = rows[keep], starts[keep], ends[keep], lengths[keep]
+    if not len(rows):
+        return []
+    order = np.lexsort((starts, -lengths, rows))    # par ligne : la plus longue, la première
+    rows, starts, ends = rows[order], starts[order], ends[order]
+    first = np.r_[True, rows[1:] != rows[:-1]]
+    return list(zip(rows[first].tolist(), starts[first].tolist(), (ends[first] - 1).tolist()))
+
+
 def _lines(mask: np.ndarray, minimum: float) -> list:
     """Traits horizontaux d'un masque : (ligne centrale, début, fin), lignes voisines réunies."""
-    found = []
-    for row in range(mask.shape[0]):
-        runs = [r for r in _runs(mask[row]) if r[1] - r[0] + 1 >= minimum]
-        if runs:
-            a, b = max(runs, key=lambda r: r[1] - r[0])
-            found.append((row, a, b))
+    found = _longest_runs(mask, minimum)
     out = []
     for row, a, b in found:
         if out and row - out[-1][-1][0] <= 1 and abs(a - out[-1][-1][1]) <= END \

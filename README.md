@@ -122,9 +122,10 @@ chiffres comparés à ceux des polices du système) et doivent former une suite 
 les autres. Le graphique arrive **calibré** sur la première et la dernière graduation de
 chaque axe, encadrées dans la fenêtre avec leur extrait : un champ vide garde la valeur
 lue (en gris), une saisie la remplace. Lecture incohérente : valeurs à saisir (sinon
-import sans calibration). Les **courbes sont relevées automatiquement** (sans GPU, environ
-0,2 s par graphique) : suivi colonne par colonne, croisements, tirets et pointillés
-reliés en une seule polyligne, parties raides (flanc d'une SOA) ; texte, traits de rappel
+import sans calibration). Les **courbes sont relevées automatiquement** (sans GPU ;
+analyse d'une datasheet de 20 graphiques en image : environ 4 s) : suivi colonne par
+colonne, croisements, tirets et pointillés reliés en une seule polyligne, parties raides
+(flanc d'une SOA) ; texte, traits de rappel
 des étiquettes, échantillons de légende et grille écartés. **Courbes nommées** d'après
 l'image : la **légende** (échantillon de trait + texte : « Eoff », « Ciss », « 25°C »,
 appariés par le style du trait), les **étiquettes** à trait de rappel (le trait est suivi

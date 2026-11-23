@@ -1238,12 +1238,29 @@ def _graph_conditions(texts) -> list:
     return out
 
 
+WORKERS = 4            # fils pour les graphiques en image (gain mesuré : ~1,8x, au-delà rien)
+
+
+def _raster_job(g, crop, source) -> list:
+    """Graphique en image : repérage, relevé et noms des courbes (fil de travail)."""
+    area = plotimage.find_plot(crop)
+    if area is None:                       # dessin, photo... pas un graphique
+        return []
+    return _interpret_raster(g, crop, area, source)
+
+
 def _build(path, found, dpi=200) -> list:
-    """Graphiques convertis : image, calibration, axes, courbes et leurs conditions."""
+    """
+    Graphiques convertis : image, calibration, axes, courbes et leurs conditions. Pages
+    rendues dans le fil principal (pypdfium2) ; graphiques en image traités dans des fils
+    (numpy, scipy libèrent le verrou de Python), résultats dans l'ordre d'origine.
+    """
+    import os
+    from concurrent.futures import ThreadPoolExecutor
     import pypdfium2 as pdfium
     path = pathlib.Path(path)
     scale = dpi / 72.0
-    rendered, out = {}, []
+    rendered, slots, jobs = {}, [], []
     try:
         doc = pdfium.PdfDocument(str(path))
     except Exception as error:            # pypdfium2 : PdfiumError
@@ -1263,10 +1280,9 @@ def _build(path, found, dpi=200) -> list:
             r1 = min(int(np.ceil((top - by0) * scale)), image.shape[0])
 
             if g.raster:
-                crop = np.ascontiguousarray(image[r0:r1, c0:c1])
-                area = plotimage.find_plot(crop)
-                if area is not None:      # sinon : dessin, photo... pas un graphique
-                    out += _interpret_raster(g, crop, area, f"{path.name} p.{g.page}")
+                jobs.append((len(slots), g, np.ascontiguousarray(image[r0:r1, c0:c1]),
+                             f"{path.name} p.{g.page}"))
+                slots.append([])
                 continue
 
             def to_pixels(points, c0=c0, r0=r0, left=left, top=top):
@@ -1282,11 +1298,19 @@ def _build(path, found, dpi=200) -> list:
                 x1=_nominal(g.x, xa, xva), x2=_nominal(g.x, xb, xvb),
                 y1=_nominal(g.y, ya, yva), y2=_nominal(g.y, yb, yvb),
                 log_x=g.x.log, log_y=g.y.log)
-            out += _interpret(g, np.ascontiguousarray(image[r0:r1, c0:c1]), calibration,
-                              to_pixels, f"{path.name} p.{g.page}")
+            slots.append(_interpret(g, np.ascontiguousarray(image[r0:r1, c0:c1]), calibration,
+                                    to_pixels, f"{path.name} p.{g.page}"))
     finally:
         doc.close()
-    return out
+    workers = min(WORKERS, os.cpu_count() or 1, len(jobs))
+    if workers > 1:
+        with ThreadPoolExecutor(workers) as pool:
+            done = list(pool.map(lambda job: _raster_job(*job[1:]), jobs))
+    else:
+        done = [_raster_job(*job[1:]) for job in jobs]
+    for (slot, *_), graphs in zip(jobs, done):
+        slots[slot] = graphs
+    return [dg for graphs in slots for dg in graphs]
 
 
 def _interpret(g, image, calibration, to_pixels, source) -> list:

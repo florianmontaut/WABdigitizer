@@ -83,6 +83,13 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     `Draft.component(indices, part, identité)` : un composant par partie, notes
     (description, conditions, avertissements). `to_component` : tous les graphiques,
     sans identité.
+    `_build` : pages rendues dans le fil principal (pypdfium2 n'est pas sûr en
+    multithread), graphiques en image traités dans `WORKERS` = 4 fils (`_raster_job` ;
+    numpy et scipy libèrent le verrou : ~1,8x ; des processus coûteraient ~1,5 s de
+    démarrage sous Windows pour peu de gain), résultats dans l'ordre d'origine. Calculs
+    d'image vectorisés (`plotimage._longest_runs`, `curvetrace._run_lengths`,
+    `_samples`, dilatations par filtre maximum séparable `_dilate`) : IMW120R045M1 de
+    11,4 s à 4,4 s, résultats identiques (photo du corpus comparée).
     Graphique en image (J4) : grandes images hors des cadres vectoriels (`_image_frames`)
     -> `FoundGraph(raster=True, x=y=None)`, légendes rattachées comme les autres ;
     `_build` les écarte si `plotimage.find_plot` ne trouve rien, sinon
@@ -233,7 +240,8 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   par l'ordre du courant) ; légendes à trait de rappel (Fig. 5 IMW) ; courbes qui se
   touchent longtemps (réseau de sortie près de l'origine) ou
   presque superposées (temps de commutation) mal séparées (à reprendre par « Suivre la
-  courbe ») ; relevé et noms ~0,35 s par graphique (à paralléliser si besoin) ; unités des
+  courbe ») ; analyse d'un PDF à 20 graphiques en image ~4,4 s (pdfminer ~1 s, le
+  reste dans les fils) ; unités des
   axes devinées seulement pour V, A, °C, W. Faible sur
   les datasheets anciennes tout en noir (FF300R12KT4 : pointillés tiret par tiret,
   légendes sans numéro, Ω de la police Symbol lu « W ») ; caractères sans Unicode
