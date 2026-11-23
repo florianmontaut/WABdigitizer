@@ -111,3 +111,15 @@ def test_conduction_plecs_sur_sortie_et_jfet():
     assert np.allclose(curves[1]["i"], [100, 200]) and np.allclose(curves[1]["y"], [1, 2])
     _, warnings = plecs.build(c)
     assert any("JFET" in w for w in warnings)
+
+
+def test_axes_d_apres_la_legende():
+    """Graphique en image : axes lus dans « Y = f(X) », grandeur d'après la lettre."""
+    assert ds.function_axes("(I_SD = f(V_SD), T_vj = 25°C, t_P = 20µs)") == ("ISD", "VSD")
+    assert ds.function_axes("Figure 10 Typical gate charge (V_GS = f(Q_G), I_DS = 20A,") \
+        == ("VGS", "QG")
+    assert ds.function_axes("Typical switching energy losses") is None
+    assert ds.classify("IDS", "A", "E", "", "switching energy losses") == "energy"
+    assert ds.classify("Tvj", "°C", "E", "", "switching energy losses") == "energy_other"
+    assert ds.classify("VSD", "V", "ISD", "A", "body diode forward current") == "diode"
+    assert ds.expand_range("R_G,ext = 2, 5, 10 Ω")[0] == "R_G,ext"

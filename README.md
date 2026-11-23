@@ -105,7 +105,20 @@ Ce qui est lu :
   (Eoff(i), Erec(i) de la diode). Un réseau de courbes selon VGS à une seule température
   n'a pas de rôle (pas une table PLECS).
 
-Limites : PDF scanné ou graphiques en image (non lus, signalés) ; courbes de même style
+**Graphiques incorporés en image** (graphiques Excel collés, par exemple IMW120R045M1) :
+repérés comme graphiques (grande image avec un cadre quadrillé et des graduations ; les
+dessins du boîtier sont écartés), avec leur nom, leurs conditions et leur caractéristique
+d'après la légende de la figure, les axes d'après « ISD = f(VSD) » (unités V, A, °C, W
+seulement : à vérifier). Les **graduations sont lues** dans l'image (sans moteur d'OCR :
+chiffres comparés à ceux des polices du système) et doivent former une suite régulière
+(arithmétique, ou géométrique : échelle log) ; une graduation mal lue est corrigée par
+les autres. Le graphique arrive **calibré** sur la première et la dernière graduation de
+chaque axe, encadrées dans la fenêtre avec leur extrait : un champ vide garde la valeur
+lue (en gris), une saisie la remplace. Lecture incohérente : valeurs à saisir (sinon
+import sans calibration). Les courbes sont à relever dans l'application (pinceau,
+extraction) ; pas de rôle PLECS proposé.
+
+Limites : PDF scanné (rien n'est lu) ; courbes de même style
 sans étiquette (à nommer) ; étiquettes absentes à la source (ST : seulement les courbes
 extrêmes) ; datasheets anciennes tout en noir à pointillés dessinés tiret par tiret
 (FF300R12KT4) : calibration juste, courbes et étiquettes à reprendre.

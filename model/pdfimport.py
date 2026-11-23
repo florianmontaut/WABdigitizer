@@ -18,6 +18,12 @@ tracés et le texte du PDF (pas dans une image), puis convertis en composant bro
 Conversion (pypdfium2) : diagramme rendu en image, recadré ; calibration orthonormée sur
 les graduations extrêmes ; points en pixels de cette image (repère unique de l'application).
 
+Graphique incorporé en image (Excel collé...) : repéré par une grande image légendée,
+cadre, grille et graduations trouvés dans l'image (`plotimage` : valeurs lues par
+comparaison aux chiffres des polices du système, suite régulière exigée) ; calibré sur
+les valeurs lues, que l'utilisateur vérifie ou remplace (`Draft.calibrate`) ; courbes
+relevées dans l'application.
+
 Ce qui n'est pas lu est signalé (avertissements) : l'import propose, l'utilisateur vérifie.
 Dépendances facultatives : pdfminer.six (MIT), pypdfium2 (Apache / BSD).
 """
@@ -29,8 +35,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import datasheet
-from .calibration import AxisCalibration, to_four_points
+from . import datasheet, plotimage
+from .calibration import AxisCalibration, CalibrationError, to_four_points
 from .document import PALETTE, Axis, Component, Dataset, Graph
 
 
@@ -674,15 +680,16 @@ class Curve:
 @dataclass
 class FoundGraph:
     page: int                             # numéro de page (1 = première)
-    frame: tuple                          # cadre du tracé, en points du PDF
-    x: AxisFit
-    y: AxisFit
+    frame: tuple                          # cadre du tracé (image : toute l'image), points du PDF
+    x: AxisFit | None                     # None : graphique en image (graduations non lues)
+    y: AxisFit | None
     x_title: str = ""
     y_title: str = ""
     caption: list = field(default_factory=list)     # légende de la figure, conditions
     curves: list = field(default_factory=list)
     notes: list = field(default_factory=list)       # encadrés, textes non rattachés
     warnings: list = field(default_factory=list)
+    raster: bool = False                  # graphique incorporé en image
 
     @property
     def title(self) -> str:
@@ -690,7 +697,7 @@ class FoundGraph:
 
     @property
     def crop(self) -> tuple:
-        return margin_box(self.frame)
+        return self.frame if self.raster else margin_box(self.frame)
 
 
 def _analyse_frame(info, chars, strokes, page_no):
@@ -902,13 +909,23 @@ def _analyse_frame(info, chars, strokes, page_no):
 
 # ================================================================ légendes de figures
 def _split_captions(page_lines) -> list:
-    """Deux légendes côte à côte sur la même ligne (« Figure 9. ...  Figure 10. ... »)."""
+    """
+    Deux légendes côte à côte sur la même ligne (« Figure 9. ...  Figure 10. ... »), même
+    collées (« ...as aFigure 4 ») quand la seconde commence à l'abscisse d'une autre
+    légende de la page.
+    """
+    starts = [row[0].x0 for t, row in page_lines if CAPTION.match(t)]
     out = []
-    for _, row in page_lines:
+    for t, row in page_lines:
         cuts = [0]
         for i in range(1, len(row)):
             rest = "".join(c.text for c in row[i:i + 12])
-            if row[i].x0 - row[i - 1].x1 > 0.15 * row[i].size and CAPTION.match(rest):
+            if not CAPTION.match(rest):
+                continue
+            spaced = row[i].x0 - row[i - 1].x1 > 0.15 * row[i].size
+            aligned = (CAPTION.match(t) and row[i].x0 > row[0].x0 + 50
+                       and any(abs(row[i].x0 - x) < 3 for x in starts))
+            if spaced or aligned:
                 cuts.append(i)
         cuts.append(len(row))
         out += [(join(row[a:b]), row[a:b]) for a, b in zip(cuts[:-1], cuts[1:])]
@@ -933,14 +950,16 @@ def _caption_blocks(page_lines, frames) -> list:
             gap = last[0].by - row2[0].by
             if gap <= 0:
                 continue
-            if gap > 1.7 * max(c.size for c in last) or CAPTION.match(t2):
+            if gap > 1.7 * max(c.size for c in last):
+                break
+            if min(c.x1 for c in row2) > max(c.x1 for c in last) \
+                    or max(c.x0 for c in row2) < min(c.x0 for c in last) - 5:
+                continue                  # autre colonne (avant le test de légende : la
+            if CAPTION.match(t2):         # légende voisine, un peu plus bas, n'arrête rien)
                 break
             ratio = max(c.size for c in row2) / max(c.size for c in last)
             if not 0.75 <= ratio <= 1.3 or in_frame(row2):
                 continue
-            if min(c.x1 for c in row2) > max(c.x1 for c in last) \
-                    or max(c.x0 for c in row2) < min(c.x0 for c in last) - 5:
-                continue                  # autre colonne
             block.append((t2, row2))
             last = row2
         blocks.append(dict(text=[t for t, _ in block],
@@ -952,37 +971,64 @@ def _caption_blocks(page_lines, frames) -> list:
 
 
 def _match_captions(frames, blocks) -> dict:
-    """Légendes toutes au-dessus ou toutes au-dessous des graphiques : la moins coûteuse."""
+    """
+    Légendes toutes au-dessus ou toutes au-dessous des graphiques : la disposition la moins
+    coûteuse. Coût d'une paire : écart vertical, plus la part du graphique que la légende
+    ne recouvre pas en largeur ; paires retenues de la moins chère à la plus chère (deux
+    graphiques côte à côte : chacun la légende de sa colonne, même un peu plus loin).
+    """
     best = None
     for side in ("above", "below"):
-        cost, pairs, free = 0.0, {}, list(range(len(blocks)))
+        cands = []
         for k, f in enumerate(frames):
             x0, y0, x1, y1 = f["frame"]
-            cands = []
-            for i in free:
-                b = blocks[i]
+            for i, b in enumerate(blocks):
                 if b["x1"] < x0 - 20 or b["x0"] > x1 + 20:
                     continue
                 d = b["bottom"] - y1 if side == "above" else y0 - b["top"]
                 if 0 <= d < 110:
-                    cands.append((d, i))
-            if cands:
-                d, i = min(cands)
+                    overlap = max(min(x1, b["x1"]) - max(x0, b["x0"]), 0.0)
+                    cands.append((d + 60 * (1 - overlap / max(x1 - x0, 1e-9)), k, i))
+        cost, pairs, taken = 0.0, {}, set()
+        for c, k, i in sorted(cands):
+            if k not in pairs and i not in taken:
                 pairs[k] = i
-                free.remove(i)
-                cost += d
-            else:
-                cost += 150
+                taken.add(i)
+                cost += c
+        cost += 150 * (len(frames) - len(pairs))
         if best is None or cost < best[0]:
             best = (cost, pairs)
     return best[1]
 
 
 # ================================================================ document
+IMAGE_MIN = 100     # côté minimal d'une image de graphique, points du PDF
+
+
+def _image_frames(images, frames, page_area) -> list:
+    """Grandes images hors des cadres vectoriels : graphiques en image possibles."""
+    out = []
+    for b in images:
+        w, h = b[2] - b[0], b[3] - b[1]
+        if w < IMAGE_MIN or h < IMAGE_MIN or w * h > 0.6 * page_area:
+            continue
+        if any(min(b[2], f["frame"][2]) - max(b[0], f["frame"][0]) > 0.2 * w and
+               min(b[3], f["frame"][3]) - max(b[1], f["frame"][1]) > 0.2 * h for f in frames):
+            continue
+        if any(abs(b[0] - o["frame"][0]) < 1 and abs(b[1] - o["frame"][1]) < 1 for o in out):
+            continue                      # image répétée
+        out.append({"frame": tuple(float(v) for v in b), "raster": True})
+    return out
+
+
 def analyse_page(page, page_no) -> list:
-    """Graphiques d'une page pdfminer (LTPage)."""
+    """
+    Graphiques d'une page pdfminer (LTPage) : vectoriels, et candidats en image (grandes
+    images, légendées ou non ; `_build` écarte celles sans cadre quadrillé).
+    """
     chars, strokes, images = flatten(page)
-    frames = find_frames(strokes, page.width * page.height)
+    vector = find_frames(strokes, page.width * page.height)
+    frames = vector + _image_frames(images, vector, page.width * page.height)
     if not frames:
         return []
     page_lines = [t for t in lines(chars) if t[0]]
@@ -991,7 +1037,7 @@ def analyse_page(page, page_no) -> list:
     caption_ids = set().union(*(b["chars"] for b in blocks)) if blocks else set()
     # chaque caractère et tracé : au graphique le plus proche (dans sa marge) ;
     # un texte tourné (titre Y) va au graphique à sa droite
-    boxes = [margin_box(f["frame"]) for f in frames]
+    boxes = [margin_box(f["frame"]) if not f.get("raster") else (0, 0, -1, -1) for f in frames]
     own_c = [[] for _ in frames]
     own_s = [[] for _ in frames]
     for c in chars:
@@ -1011,14 +1057,18 @@ def analyse_page(page, page_no) -> list:
     used_all = set(caption_ids)
     found = []
     for k, f in enumerate(frames):
-        g, used = _analyse_frame(f, own_c[k], own_s[k], page_no)
+        if f.get("raster"):
+            g, used = FoundGraph(page_no, f["frame"], None, None, raster=True), set()
+            g.warnings.append("graphique en image : courbes à relever dans l'application")
+        else:
+            g, used = _analyse_frame(f, own_c[k], own_s[k], page_no)
         if g is None:
             continue
         used_all |= used
         if k in pairs:
             g.caption = list(blocks[pairs[k]]["text"])
         x0, y0, x1, y1 = f["frame"]
-        if any(b[0] < x1 and b[2] > x0 and b[1] < y1 and b[3] > y0 and
+        if not g.raster and any(b[0] < x1 and b[2] > x0 and b[1] < y1 and b[3] > y0 and
                (b[2] - b[0]) * (b[3] - b[1]) > 0.2 * (x1 - x0) * (y1 - y0) for b in images):
             g.warnings.append("image dans le cadre : courbes peut-être en image, non lues")
         found.append((k, g))
@@ -1037,7 +1087,18 @@ def analyse_page(page, page_no) -> list:
                        and min(c.x0 for c in r) < x1 and max(c.x1 for c in r) > x0),
                       key=lambda t: -t[1][0].by)
         g.caption += [t for t, _ in down]
-    return [g for _, g in sorted(found, key=lambda kg: (-kg[1].frame[3], kg[1].frame[0]))]
+    return reading_order([g for _, g in found])
+
+
+def reading_order(graphs) -> list:
+    """De haut en bas par rangées (hauts à moins de 15 points près), de gauche à droite."""
+    rows = []
+    for g in sorted(graphs, key=lambda g: -g.frame[3]):
+        if rows and rows[-1][0].frame[3] - g.frame[3] < 15:
+            rows[-1].append(g)
+        else:
+            rows.append([g])
+    return [g for row in rows for g in sorted(row, key=lambda g: g.frame[0])]
 
 
 def analyse(path, pages=None) -> list:
@@ -1058,7 +1119,7 @@ def analyse(path, pages=None) -> list:
 
 # ================================================================ conversion en composant
 TEMPERATURE = re.compile(r"\bT[\w,]*\s*=\s*([−-]?\d+(?:[.,]\d+)?)\s*[°º]\s*C")
-PAIR = re.compile(r"([A-Za-z][\w()]*)\s*=\s*([^,;]+)")
+PAIR = re.compile(r"([A-Za-z][\w()]*(?:,[A-Za-z]\w*)?)\s*=\s*([^,;]+)")    # « R_G,ext = 2 Ω »
 
 
 def _nominal(fit: AxisFit, pos: float, value: float) -> float:
@@ -1078,6 +1139,7 @@ class DraftGraph:
     part: str = ""                        # composant auquel il revient (« IGBT », « Diode »)
     conditions: list = field(default_factory=list)  # conditions communes, lisibles
     warnings: list = field(default_factory=list)
+    plot: plotimage.PlotArea | None = None  # graphique en image : cadre, graduations repérées
 
 
 @dataclass
@@ -1111,6 +1173,25 @@ class Draft:
         component.graphs = [dg.graph for dg in chosen]
         component.notes, warnings = _notes(self.path.name, identity, chosen)
         return component, warnings
+
+    def calibrate(self, index, x1, x2, y1, y2, log_x=False, log_y=False):
+        """
+        Graphique en image : valeurs des graduations repérées (première et dernière de chaque
+        axe) -> calibration orthonormée sur ces repères. CalibrationError si incohérentes.
+        """
+        dg = self.graphs[index]
+        if dg.plot is None:
+            raise ValueError("graphique vectoriel : déjà calibré")
+        calibration = _raster_calibration(dg.plot, x1, x2, y1, y2, log_x, log_y)
+        dg.graph.set_calibration(calibration)
+        return calibration
+
+
+def _raster_calibration(plot, x1, x2, y1, y2, log_x, log_y) -> AxisCalibration:
+    """Calibration orthonormée sur les repères d'un graphique en image (O, X2, Y2)."""
+    origin, px2, py2 = plot.markers()
+    return AxisCalibration(*to_four_points(origin, px2, py2), x1=x1, x2=x2, y1=y1, y2=y2,
+                           log_x=log_x, log_y=log_y)
 
 
 def _notes(filename, identity, chosen) -> tuple:
@@ -1180,6 +1261,13 @@ def _build(path, found, dpi=200) -> list:
             c1 = min(int(np.ceil((bx1 - left) * scale)), image.shape[1])
             r0 = max(int(np.floor((top - by1) * scale)), 0)
             r1 = min(int(np.ceil((top - by0) * scale)), image.shape[0])
+
+            if g.raster:
+                crop = np.ascontiguousarray(image[r0:r1, c0:c1])
+                area = plotimage.find_plot(crop)
+                if area is not None:      # sinon : dessin, photo... pas un graphique
+                    out.append(_interpret_raster(g, crop, area, f"{path.name} p.{g.page}"))
+                continue
 
             def to_pixels(points, c0=c0, r0=r0, left=left, top=top):
                 points = np.asarray(points, dtype=float).reshape(-1, 2)
@@ -1301,6 +1389,54 @@ def _interpret(g, image, calibration, to_pixels, source) -> list:
     return out
 
 
+# unités sûres d'après la lettre du symbole (les autres dépendent d'un préfixe : µJ, nC, ns...)
+SYMBOL_UNITS = {"V": "V", "I": "A", "T": "°C", "P": "W"}
+
+
+def _interpret_raster(g, image, area, source) -> DraftGraph:
+    """
+    Graphique en image : nom, conditions et type d'après la légende de la figure ; axes
+    d'après « Y = f(X) » ; pas de calibration (valeurs saisies par l'utilisateur) ni de
+    courbe (relevées dans l'application).
+    """
+    caption, _, _ = _texts(g, ())
+    title = datasheet.plain(caption[0]) if caption else f"Page {g.page}"
+    yq, xq = datasheet.function_axes(" ".join(caption)) or ("", "")
+    xu, yu = (SYMBOL_UNITS.get(q[:1], "") for q in (xq, yq))
+    kind = datasheet.classify(xq, xu, yq, yu, " ".join(caption))
+    pairs = _graph_conditions(caption[1:] if len(caption) > 1 else caption)
+    conditions = [f"{datasheet.plain(s)} = {datasheet.plain(v)}" for s, v in pairs]
+    warnings = list(g.warnings)
+    if xq or yq:
+        warnings.append("axes d'après la légende (« Y = f(X) ») : unités à vérifier")
+    values = area.read_values()
+    calibration = None
+    if None not in values.values():
+        try:
+            calibration = _raster_calibration(area, log_x=area.log_x, log_y=area.log_y,
+                                              **values)
+            warnings.append(f"graduations lues dans l'image (X de {values['x1']:g} à "
+                            f"{values['x2']:g}, Y de {values['y1']:g} à {values['y2']:g}) : "
+                            "à vérifier")
+        except CalibrationError as error:
+            warnings.append(f"graduations lues incohérentes ({error}) : à saisir")
+    else:
+        missing = [axis for axis, v in (("X", values["x1"]), ("Y", values["y1"])) if v is None]
+        warnings.append(f"graduations {' et '.join(missing)} non lues : valeurs à saisir")
+    graph = Graph(name=title, image=image, source=source)
+    graph.x_axis = Axis(datasheet.plain(xq), xu)
+    graph.y_axis = Axis(datasheet.plain(yq), yu)
+    dataset = Dataset(name="Courbe 1", condition=", ".join(conditions))
+    m = TEMPERATURE.search(dataset.condition)
+    if m:
+        dataset.temperature = float(m.group(1).replace("−", "-").replace(",", "."))
+    dataset.color = PALETTE[0]
+    graph.datasets = [dataset]
+    graph.set_calibration(calibration)
+    diode = datasheet.diode_graph(" ".join(caption), xq, yq)
+    return DraftGraph(graph, g, kind, "", diode, "", conditions, warnings, plot=area)
+
+
 def _assign_parts(graphs, category) -> list:
     """Parties et rôles PLECS : module IGBT avec graphiques de diode -> IGBT + Diode."""
     module = category == "IGBT" and any(dg.diode for dg in graphs)
@@ -1308,8 +1444,8 @@ def _assign_parts(graphs, category) -> list:
     for dg in graphs:
         dg.part = "Diode" if module and dg.diode else parts[0]
         temperatures = [d.temperature for d in dg.graph.datasets]
-        dg.graph.plecs_role = datasheet.plecs_role(dg.kind, temperatures, dg.energy,
-                                                   diode_part=module and dg.diode)
+        dg.graph.plecs_role = "" if dg.plot is not None else datasheet.plecs_role(
+            dg.kind, temperatures, dg.energy, diode_part=module and dg.diode)
     return parts
 
 
@@ -1329,11 +1465,10 @@ def prepare(path, dpi=200, pages=None) -> Draft:
     """Import préparé, avant le choix de l'utilisateur ; PdfImportError sans graphique."""
     path = pathlib.Path(path)
     found = analyse(path, pages)
-    if not found:
-        raise PdfImportError(f"{path.name} : aucun graphique vectoriel trouvé "
-                             "(PDF scanné, ou graphiques en image)")
+    graphs = _build(path, found, dpi) if found else []
+    if not graphs:
+        raise PdfImportError(f"{path.name} : aucun graphique trouvé (PDF scanné ?)")
     identity = read_identity(path)
-    graphs = _build(path, found, dpi)
     return Draft(path, identity, graphs, _assign_parts(graphs, identity.category))
 
 

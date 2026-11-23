@@ -833,6 +833,48 @@ def test_dialogue_d_import_pdf(tmp_path):
     app.processEvents()
 
 
+def test_dialogue_d_import_graphique_en_image(tmp_path):
+    pytest.importorskip("pdfminer")
+    pytest.importorskip("pypdfium2")
+    pytest.importorskip("matplotlib")
+    from model import pdfimport
+    from test_pdfimport import raster_datasheet
+    from view.pdf_import_dialog import PdfImportDialog
+    draft = pdfimport.prepare(raster_datasheet(tmp_path / "image.pdf"))
+    app = QtWidgets.QApplication.instance()
+    dialog = PdfImportDialog(draft)
+    dialog.table.selectRow(0)
+    assert dialog.ticks_box.isVisibleTo(dialog)
+    assert not dialog.tick_images["y2"].pixmap().isNull()
+    graph = draft.graphs[0].graph
+    # valeurs lues : calibré d'emblée, champs vides avec la valeur lue en texte gris
+    assert graph.calibrated and dialog.table.item(0, 7).text() == "image, calibrée"
+    assert dialog.tick_edits["y2"].text() == ""
+    assert dialog.tick_edits["y2"].placeholderText() == "lu : 60"
+    assert "lues dans l'image" in dialog.tick_error.text()
+    dialog.tick_edits["y2"].setText("6*10")              # saisie : remplace la valeur lue
+    dialog._ticks_edited()
+    assert graph.calibrated and graph.calibration.y2 == 60
+    assert "saisies" in dialog.tick_error.text()
+    dialog.tick_edits["y2"].setText("")                   # vide : retour à la valeur lue
+    dialog.tick_edits["x2"].setText("5")
+    dialog._ticks_edited()
+    assert graph.calibration.x2 == 5 and graph.calibration.y2 == 60
+    dialog.tick_edits["x2"].setText("0")                 # X1 = X2 : refusé, non calibré
+    dialog._ticks_edited()
+    assert not graph.calibrated and dialog.tick_error.text()
+    dialog.tick_edits["x2"].setText("6")
+    dialog.log_y.setChecked(True)                        # log avec Y1 = 0 : refusé
+    assert not graph.calibrated
+    dialog.tick_edits["y1"].setText("1")
+    dialog._ticks_edited()
+    assert graph.calibrated and graph.calibration.log_y
+    component, _ = draft.component(**dialog.choice())
+    assert component.graphs[0].calibrated
+    dialog.deleteLater()
+    app.processEvents()
+
+
 def test_separer_les_points_du_masque(ctrl):
     graph = calibrated(ctrl)
     dataset = ctrl.dataset

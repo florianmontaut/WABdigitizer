@@ -19,7 +19,8 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
 
 - Python 3.11, PyQt6 6.4.2, pyqtgraph 0.13.3, numpy, scipy, pytest (`requirements.txt`) ;
   scikit-image facultatif (méthode « Squelette ») ; pdfminer.six + pypdfium2 facultatifs
-  (import PDF), matplotlib pour ses tests. pip du poste : `--use-feature=truststore`
+  (import PDF), Pillow (rendu, lecture des graduations en image), matplotlib pour ses
+  tests. pip du poste : `--use-feature=truststore`
   (sinon erreur de certificat SSL).
 - Interpréteur du poste : `..\..\env\Scripts\python.exe`.
 - **qtsocle** (dépôt voisin, `pip install -e ..\qtsocle`) : thème, icônes, options,
@@ -82,6 +83,15 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     `Draft.component(indices, part, identité)` : un composant par partie, notes
     (description, conditions, avertissements). `to_component` : tous les graphiques,
     sans identité.
+    Graphique en image (J4) : grandes images hors des cadres vectoriels (`_image_frames`)
+    -> `FoundGraph(raster=True, x=y=None)`, légendes rattachées comme les autres ;
+    `_build` les écarte si `plotimage.find_plot` ne trouve rien, sinon
+    `_interpret_raster` (légende, axes par `datasheet.function_axes`, sans calibration ni
+    courbe, `DraftGraph.plot` ; calibré sur les valeurs lues s'il y en a).
+    `Draft.calibrate(i, x1, x2, y1, y2, log)` : valeurs saisies -> calibration
+    orthonormée sur `PlotArea.markers()`. Légendes : `_match_captions` choisit les paires
+    de la moins chère à la plus chère (écart vertical + largeur non recouverte) ;
+    `reading_order` : rangées puis gauche à droite.
     Corpus de mise au point (fichiers de l'utilisateur, jamais versionnés) : voir la
     mémoire du projet ; `tests/test_pdfimport.py` fabrique ses PDF avec matplotlib.
   - `datasheet.py` : sens d'une datasheet, règles explicites sur le texte (pas de LLM :
@@ -92,6 +102,16 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     `parameter` / `curve_condition`, `expand_range` (plage ou liste) / `assign_range`
     (ordre du courant moyen), `classify` (`KINDS`), `energy_kind`, `diode_graph`,
     `plecs_role`. `dimension` contourne « pF » (préfixe pico inconnu de formules).
+  - `plotimage.py` : graphique en image : `find_plot` -> `PlotArea` (cadre = traits de
+    grille de même étendue, graduations = premières bandes d'encre sous le cadre et à sa
+    gauche, découpées en étiquettes, prolongées à gauche sans le titre tourné ;
+    `markers()` : O, X2, Y2 sur les graduations extrêmes, recalées sur la grille ; log si
+    au moins 3 traits secondaires irréguliers entre deux graduations, traits partiels
+    compris, hors courbes noires). Valeurs (`_read_ticks`, sans moteur d'OCR) : chiffres
+    comparés aux modèles dessinés par Pillow avec les polices du système (`font_paths`,
+    police la plus ressemblante pour tout le graphique ; « . » et « - » par leur forme),
+    puis `tick_sequence` : suite linéaire (ou en log10) des positions qui explique le plus
+    de graduations (70 % et 3 au moins), extrémités mal lues prises de la suite.
   - `compare.py` : comparaison entre composants de tous types. Courbes regroupées par
     dimensions physiques (X, Y) de leurs unités (`formules.units`), sinon par noms des
     grandeurs ; `Frame` : unités communes (celles de la première courbe) ; valeurs au
@@ -103,8 +123,9 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   composant ouvert lu par `weakref.WeakMethod`, réglages partagés (`options`).
 - `view/pdf_import_dialog.py` : import d'une datasheet PDF : identité modifiable, partie
   (module), table cochable avec caractéristique et rôle PLECS (liste par ligne, écrit
-  dans `Graph.plecs_role`), aperçu et détail. `choice()` -> arguments de
-  `Draft.component`. `MainController.open_pdf` / `import_pdf` (`choose` : indices sans
+  dans `Graph.plecs_role`), aperçu et détail ; graphique en image : graduations
+  encadrées, extraits, valeurs lues en texte gris (champ vide = valeur lue, saisie =
+  remplacement ; `Draft.calibrate` dès que les quatre sont connues). `choice()` -> arguments de `Draft.component`. `MainController.open_pdf` / `import_pdf` (`choose` : indices sans
   dialogue ; sans écran : graphiques de la partie `part`, la première par défaut) :
   nouveau composant sans fichier, marqué modifié, pile vidée (comme une ouverture).
   Commande grisée sans les paquets.
@@ -134,7 +155,8 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   au relâchement. Les propriétés (noms, unités, réglages) restent hors de la pile :
   `set_dirty()` ; l'étoile du titre = hors pile ou pile non propre.
 - `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_compare.py`, `test_zoom.py`,
-  `test_library.py`, `test_pdfimport.py`, `test_datasheet.py`, `test_gui.py`
+  `test_library.py`, `test_pdfimport.py`, `test_datasheet.py`, `test_plotimage.py`,
+  `test_gui.py`
   (contrôleurs sans écran).
 
 ## Choix de conception à respecter
@@ -172,8 +194,9 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
 - Export PLECS : jamais importé dans PLECS lui-même ; classes « IGBT with Diode » /
   « MOSFET with Diode », modèle de Cauer, ajustement de Foster sur une courbe Zth(t).
 
-- Import PDF (proposition J0–J4, J0 à J3 faits) : J4 repli image (calibration
-  automatique sur une image incorporée quand les graduations sont du texte). Faible sur
+- Import PDF (J0 à J4 faits) : graphiques en image : graduations en exposant (10^n) non
+  lues, courbes non relevées (noires, pointillés, croisées), unités des axes devinées
+  seulement pour V, A, °C, W. Faible sur
   les datasheets anciennes tout en noir (FF300R12KT4 : pointillés tiret par tiret,
   légendes sans numéro, Ω de la police Symbol lu « W ») ; caractères sans Unicode
   (« ¤ ») ; conduction sur un réseau de courbes selon VGS (choisir la tension de grille) ;

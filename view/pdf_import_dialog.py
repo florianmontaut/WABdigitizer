@@ -6,17 +6,26 @@ table des graphiques trouvés (cochable : page, nom, caractéristique, rôle PLE
 axes, courbes, points à vérifier), aperçu du graphique choisi (image et courbes lues) et
 détail (courbes et conditions, avertissements).
 Les graphiques sont déjà convertis (model.pdfimport.prepare) : l'aperçu est ce qui sera
-importé.
+importé. Graphique en image : graduations repérées encadrées sur l'aperçu, valeurs lues
+dans l'image proposées (texte gris des champs) : un champ vide garde la valeur lue, une
+saisie la remplace (-> Draft.calibrate) ; sans valeur lue ni saisie, le graphique est
+importé sans calibration.
 """
 import numpy as np
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from model import datasheet, plecs
+from model.calibration import CalibrationError
+from .dialogs import format_value, parse_value
 from .properties import CATEGORIES
 
 HEADERS = ["", "Page", "Graphique", "Caractéristique", "Rôle PLECS", "Axe X", "Axe Y",
            "Courbes", "À vérifier"]
 ROLE_COLUMN = 4
+# graduations d'un graphique en image : (clé, texte, axe, extrémité), couleurs des repères
+TICKS = (("x1", "X, première graduation", "x", 0), ("x2", "X, dernière graduation", "x", -1),
+         ("y1", "Y, première graduation (bas)", "y", -1), ("y2", "Y, dernière graduation (haut)", "y", 0))
+MARKER_COLORS = {"x1": "#E53935", "x2": "#D81B60", "y1": "#E53935", "y2": "#FB8C00"}
 
 
 def array_to_qimage(image: np.ndarray) -> QtGui.QImage:
@@ -85,11 +94,14 @@ class PdfImportDialog(QtWidgets.QDialog):
             check.setFlags(QtCore.Qt.ItemFlag.ItemIsUserCheckable | QtCore.Qt.ItemFlag.ItemIsEnabled
                            | QtCore.Qt.ItemFlag.ItemIsSelectable)
             table.setItem(row, 0, check)
+            raster = dg.plot is not None
+            log_x, log_y = (dg.plot.log_x, dg.plot.log_y) if raster else (found.x.log, found.y.log)
             values = {1: str(found.page), 2: graph.name,
                       3: datasheet.KINDS.get(dg.kind, dg.kind) + (" (diode)" if dg.part == "Diode"
                                                                   and len(draft.parts) > 1 else ""),
-                      5: axis_text(graph.x_axis, found.x.log), 6: axis_text(graph.y_axis, found.y.log),
-                      7: str(len(graph.datasets)),
+                      5: axis_text(graph.x_axis, log_x), 6: axis_text(graph.y_axis, log_y),
+                      7: (("image, calibrée" if graph.calibrated else "image") if raster
+                          else str(len(graph.datasets))),
                       8: str(len(dg.warnings)) if dg.warnings else ""}
             for col, value in values.items():
                 cell = QtWidgets.QTableWidgetItem(value)
@@ -118,10 +130,12 @@ class PdfImportDialog(QtWidgets.QDialog):
         self.details = QtWidgets.QPlainTextEdit()
         self.details.setReadOnly(True)
         self.details.setMaximumHeight(170)
+        self._build_ticks()
         right = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(right)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.preview, 1)
+        lay.addWidget(self.ticks_box)
         lay.addWidget(self.details)
         left = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(left)
@@ -136,7 +150,10 @@ class PdfImportDialog(QtWidgets.QDialog):
 
         buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok
                                              | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setText("Importer")
+        ok = buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+        ok.setText("Importer")
+        ok.setAutoDefault(False)          # Entrée dans une valeur de graduation : pas d'import
+        ok.setDefault(False)
         every = buttons.addButton("Tout cocher", QtWidgets.QDialogButtonBox.ButtonRole.ActionRole)
         none = buttons.addButton("Tout décocher", QtWidgets.QDialogButtonBox.ButtonRole.ActionRole)
         every.clicked.connect(self.check_all)
@@ -172,6 +189,116 @@ class PdfImportDialog(QtWidgets.QDialog):
         else:
             self.category.setEditText(category)
 
+    # ------------------------------------------------------------ graduations (image)
+    def _build_ticks(self):
+        """Saisie des valeurs des graduations repérées d'un graphique en image."""
+        box = QtWidgets.QGroupBox("Graphique en image : graduations encadrées (vide = valeur lue)")
+        grid = QtWidgets.QGridLayout(box)
+        self.tick_images, self.tick_edits = {}, {}
+        for row, (key, text, _, _) in enumerate(TICKS):
+            label = QtWidgets.QLabel(text)
+            label.setStyleSheet(f"color: {MARKER_COLORS[key]}")
+            snippet = QtWidgets.QLabel()
+            snippet.setMinimumWidth(70)
+            edit = QtWidgets.QLineEdit()
+            edit.setObjectName(key)
+            edit.editingFinished.connect(self._ticks_edited)
+            grid.addWidget(label, row, 0)
+            grid.addWidget(snippet, row, 1)
+            grid.addWidget(edit, row, 2)
+            self.tick_images[key], self.tick_edits[key] = snippet, edit
+        self.log_x = QtWidgets.QCheckBox("Axe X logarithmique")
+        self.log_y = QtWidgets.QCheckBox("Axe Y logarithmique")
+        for check in (self.log_x, self.log_y):
+            check.toggled.connect(self._ticks_edited)
+        grid.addWidget(self.log_x, 0, 3)
+        grid.addWidget(self.log_y, 2, 3)
+        self.tick_error = QtWidgets.QLabel()
+        self.tick_error.setWordWrap(True)
+        grid.addWidget(self.tick_error, 4, 0, 1, 4)
+        box.hide()
+        self.ticks_box = box
+        self._ticks_row = -1
+        self._ticks_loading = False
+        self.tick_values = {}             # ligne -> (textes saisis, log_x, log_y)
+
+    def _load_ticks(self, row):
+        """Graduations du graphique choisi : extraits de l'image, valeurs déjà saisies."""
+        dg = self.draft.graphs[row]
+        self._ticks_row = row
+        self.ticks_box.setVisible(dg.plot is not None)
+        if dg.plot is None:
+            return
+        self._ticks_loading = True
+        texts, log_x, log_y = self.tick_values.get(row, ({}, dg.plot.log_x, dg.plot.log_y))
+        for key, _, axis, end in TICKS:
+            x0, y0, x1, y1 = (dg.plot.x_labels if axis == "x" else dg.plot.y_labels)[end]
+            image = dg.graph.image
+            y1 = max(y1, int(y0 + dg.plot.char))  # « 0 » du bas : coupé au bord du cadre
+            part = image[max(y0 - 3, 0):y1 + 4, max(x0 - 3, 0):x1 + 4]
+            pixmap = QtGui.QPixmap.fromImage(array_to_qimage(part))
+            self.tick_images[key].setPixmap(pixmap.scaledToHeight(
+                min(28, 2 * pixmap.height()), QtCore.Qt.TransformationMode.SmoothTransformation))
+            self.tick_edits[key].setText(texts.get(key, ""))
+            read = dg.plot.read_values()[key]
+            self.tick_edits[key].setPlaceholderText(
+                f"lu : {format_value(read)}" if read is not None else "à saisir")
+        self.log_x.setChecked(log_x)
+        self.log_y.setChecked(log_y)
+        self._ticks_loading = False
+        self._tick_status()
+
+    def _ticks_edited(self, *_):
+        """
+        Valeurs saisies, sinon lues : calibration du graphique dès que les quatre sont
+        connues (un champ vide garde la valeur lue dans l'image).
+        """
+        row = self._ticks_row
+        if self._ticks_loading or not 0 <= row < len(self.draft.graphs) \
+                or self.draft.graphs[row].plot is None:
+            return
+        dg = self.draft.graphs[row]
+        texts = {key: edit.text().strip() for key, edit in self.tick_edits.items()}
+        self.tick_values[row] = (texts, self.log_x.isChecked(), self.log_y.isChecked())
+        dg.graph.set_calibration(None)
+        read = dg.plot.read_values()
+        try:
+            values = {key: parse_value(text) if text else read[key]
+                      for key, text in texts.items()}
+            if None not in values.values():
+                self.draft.calibrate(row, log_x=self.log_x.isChecked(),
+                                     log_y=self.log_y.isChecked(), **values)
+        except (ValueError, CalibrationError) as error:
+            self.tick_error.setText(f"<span style='color:#C62828'>{error}</span>")
+            self._update_row(row)
+            self._show(row)
+            return
+        self._tick_status()
+        self._update_row(row)
+        self._show(row)
+
+    def _tick_status(self):
+        graph = self.draft.graphs[self._ticks_row].graph
+        typed = any(edit.text().strip() for edit in self.tick_edits.values())
+        if graph.calibrated:
+            cal = graph.calibration
+            origin = "valeurs lues dans l'image, à vérifier" if not typed else "valeurs saisies"
+            self.tick_error.setText(
+                f"Calibré ({origin}) : X de {format_value(cal.x1)} à {format_value(cal.x2)}, "
+                f"Y de {format_value(cal.y1)} à {format_value(cal.y2)}. Courbes à relever "
+                "après l'import (pinceau, extraction).")
+        else:
+            self.tick_error.setText("Valeurs non lues : à saisir, sinon le graphique est "
+                                    "importé sans calibration (à calibrer dans l'application).")
+
+    def _update_row(self, row):
+        dg = self.draft.graphs[row]
+        if dg.plot is not None:
+            texts, log_x, log_y = self.tick_values.get(row, ({}, dg.plot.log_x, dg.plot.log_y))
+            self.table.item(row, 5).setText(axis_text(dg.graph.x_axis, log_x))
+            self.table.item(row, 6).setText(axis_text(dg.graph.y_axis, log_y))
+            self.table.item(row, 7).setText("image, calibrée" if dg.graph.calibrated else "image")
+
     def _role_changed(self, *_):
         for combo, dg in zip(self.roles, self.draft.graphs):
             dg.graph.plecs_role = combo.currentData() or ""
@@ -204,6 +331,8 @@ class PdfImportDialog(QtWidgets.QDialog):
             return
         dg = self.draft.graphs[row]
         graph = dg.graph
+        if row != self._ticks_row:
+            self._load_ticks(row)
         pixmap = QtGui.QPixmap.fromImage(array_to_qimage(graph.image))
         painter = QtGui.QPainter(pixmap)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
@@ -212,6 +341,16 @@ class PdfImportDialog(QtWidgets.QDialog):
             points = [QtCore.QPointF(float(x), float(y)) for x, y in dataset.pixels]
             if len(points) > 1:
                 painter.drawPolyline(QtGui.QPolygonF(points))
+        if dg.plot is not None:                           # graduations repérées, repères
+            origin, x2, y2 = dg.plot.markers()
+            centers = {"x1": origin, "x2": x2, "y1": origin, "y2": y2}
+            for key, _, axis, end in TICKS:
+                x0, y0, x1, y1 = (dg.plot.x_labels if axis == "x" else dg.plot.y_labels)[end]
+                pen = QtGui.QPen(QtGui.QColor(MARKER_COLORS[key]), 2)
+                painter.setPen(pen)
+                painter.drawRect(QtCore.QRectF(x0 - 3, y0 - 3, x1 - x0 + 6, y1 - y0 + 6))
+                cx, cy = centers[key]
+                painter.drawEllipse(QtCore.QPointF(cx, cy), 6, 6)
         painter.end()
         self.preview.setPixmap(pixmap.scaled(
             self.preview.size(), QtCore.Qt.AspectRatioMode.KeepAspectRatio,

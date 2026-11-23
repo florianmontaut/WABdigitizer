@@ -167,3 +167,71 @@ def test_courbes_en_double_et_point_commun(tmp_path):
     assert len(graph.curves) == 4
     for curve in graph.curves:                          # aucune courbe ne revient en arrière
         assert np.all(np.diff(curve.points[:, 0]) > 0)
+
+
+def raster_datasheet(path):
+    """
+    Page avec un graphique en image (style Excel) légendé « Figure 3. ... (ISD = f(VSD),
+    Tvj = 25 °C) » et un dessin quadrillé sans graduations ni légende (écarté).
+    """
+    import matplotlib.pyplot as plt
+    from test_plotimage import chart
+    image, _ = chart()
+    drawing = np.full((300, 300, 3), 255, np.uint8)
+    drawing[40:260:20, 40:260] = 0
+    drawing[40:260, 40:260:20] = 0
+    with matplotlib.rc_context({"pdf.fonttype": 42}):
+        fig = plt.figure(figsize=(8.27, 11.7))
+        for box, picture in (([0.08, 0.5, 0.4, 0.4], image), ([0.55, 0.5, 0.4, 0.4], drawing)):
+            ax = fig.add_axes(box)
+            ax.imshow(picture, interpolation="none")
+            ax.axis("off")
+        fig.text(0.1, 0.47, "Figure 3. Typical body diode forward current", fontsize=9)
+        fig.text(0.1, 0.4555, "(ISD = f(VSD), Tvj = 25 °C, tP = 20 µs)", fontsize=9)
+        fig.savefig(path)
+        plt.close(fig)
+    return path
+
+
+def test_graphique_en_image(tmp_path):
+    pdf = raster_datasheet(tmp_path / "image.pdf")
+    draft = pdfimport.prepare(pdf)
+    assert len(draft.graphs) == 1                        # le dessin est écarté
+    dg = draft.graphs[0]
+    graph = dg.graph
+    assert dg.plot is not None and dg.found.raster
+    assert graph.name.startswith("Figure 3.")
+    assert (graph.x_axis.quantity, graph.x_axis.unit) == ("VSD", "V")
+    assert (graph.y_axis.quantity, graph.y_axis.unit) == ("ISD", "A")
+    assert dg.kind == "diode" and graph.plecs_role == ""
+    assert "Tvj = 25 °C" in dg.conditions
+    assert graph.datasets[0].temperature == 25
+    assert any("graphique en image" in w for w in dg.warnings)
+    # graduations lues dans l'image : calibré dès l'import, signalé « à vérifier »
+    assert graph.calibrated and dg.plot.read_values() == {"x1": 0, "x2": 6, "y1": 0, "y2": 60}
+    assert any("graduations lues" in w and "à vérifier" in w for w in dg.warnings)
+    calibration = graph.calibration
+    bottom = dg.plot.frame[3]
+    xs = calibration.pixel_to_data([(x, bottom) for x in dg.plot.x_grid])[:, 0]
+    ys = calibration.pixel_to_data([(dg.plot.frame[0], y) for y in dg.plot.y_grid])[:, 1]
+    assert np.allclose(xs, np.round(xs), atol=0.03)      # traits de grille : 0, 1, ... 6
+    assert np.allclose(ys, np.round(ys / 10) * 10, atol=0.3)
+    component, warnings = draft.component()
+    assert component.graphs == [graph] and any("graphique en image" in w for w in warnings)
+    calibration = draft.calibrate(0, 1, 5, 10, 50)          # valeurs corrigées à la main
+    assert graph.calibration is calibration and calibration.x2 == 5
+    vector = pdfimport.DraftGraph(graph, dg.found)        # sans graduations repérées
+    with pytest.raises(ValueError, match="vectoriel"):
+        pdfimport.Draft(draft.path, draft.identity, [vector], []).calibrate(0, 0, 1, 0, 1)
+
+
+def test_graphique_en_image_sans_lecture(tmp_path, monkeypatch):
+    """Sans police pour lire les chiffres : repères posés, calibration à saisir."""
+    from model import plotimage
+    monkeypatch.setattr(plotimage, "font_paths", lambda: ())
+    draft = pdfimport.prepare(raster_datasheet(tmp_path / "image.pdf"))
+    dg = draft.graphs[0]
+    assert not dg.graph.calibrated and dg.plot.x_values is None
+    assert any("non lues" in w for w in dg.warnings)
+    draft.calibrate(0, 0, 6, 0, 60)
+    assert dg.graph.calibrated

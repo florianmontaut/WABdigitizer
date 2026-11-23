@@ -105,6 +105,7 @@ def clean(text: str) -> str:
 LETTERS = {"température": "T", "tension": "V", "courant": "I", "résistance électrique": "R",
            "temps": "t", "énergie": "E", "puissance": "P", "capacité": "C", "charge": "Q",
            "résistance thermique": "Z", "fréquence": "f"}
+SYMBOLS = {letter: name for name, letter in LETTERS.items()}      # « E » -> « énergie »
 PREFIX = "pnuµmkMG"
 
 
@@ -192,11 +193,11 @@ def curve_condition(label: str, param) -> str:
     return label
 
 
-RANGE = re.compile(r"([A-Za-z][\w()]*)\s*=\s*" + VALUE + r"\s*([^\s~∼～,]*)\s*[~∼～]\s*" + VALUE
+RANGE = re.compile(r"([A-Za-z][\w()]*(?:,[A-Za-z]\w*)?)\s*=\s*" + VALUE + r"\s*([^\s~∼～,]*)\s*[~∼～]\s*" + VALUE
                    + r"\s*([^\s,]*)\s*,\s*" + VALUE + r"\s*[^\s,]*\s*step", re.I)
 
 
-LIST = re.compile(r"([A-Za-z][\w()]*)\s*=\s*(" + VALUE + r"(?:\s*,\s*" + VALUE + r")+)\s*([^\s,;]+)")
+LIST = re.compile(r"([A-Za-z][\w()]*(?:,[A-Za-z]\w*)?)\s*=\s*(" + VALUE + r"(?:\s*,\s*" + VALUE + r")+)\s*([^\s,;]+)")
 
 
 def expand_range(text: str):
@@ -242,6 +243,15 @@ def format_value(value: float, unit: str) -> str:
     return f"{text} {unit}".strip()
 
 
+FUNCTION = re.compile(r"([A-Za-z][\w(),]*?)\s*=\s*f\s*\(\s*([A-Za-z][\w(),]*?)\s*[,)]")
+
+
+def function_axes(text: str):
+    """« (I_SD = f(V_SD), T_vj = 25 °C) » -> (« I_SD », « V_SD ») : grandeurs Y et X ; None."""
+    m = FUNCTION.search(plain(text or ""))
+    return (m.group(1), m.group(2)) if m else None
+
+
 # ================================================================ caractéristiques
 KINDS = {
     "output": "Caractéristique de sortie",
@@ -265,9 +275,11 @@ GATE = re.compile(r"_?(GS|GE)\b", re.I)
 
 def classify(x_quantity, x_unit, y_quantity, y_unit, caption: str) -> str:
     """Type de caractéristique d'après les grandeurs des axes et la légende."""
-    dx, dy = dimension(x_unit), dimension(y_unit)
-    cap = plain(caption).lower()
     xq, yq = x_quantity or "", y_quantity or ""
+    # sans unité (graphique en image : axes lus dans « Y = f(X) ») : lettre du symbole
+    dx = dimension(x_unit) or (SYMBOLS.get(xq[:1], "") if not x_unit else "")
+    dy = dimension(y_unit) or (SYMBOLS.get(yq[:1], "") if not y_unit else "")
+    cap = plain(caption).lower()
     if re.search(r"safe operat|\bsoa\b|\brbsoa\b|arbeitsbereich", cap):
         return "soa"
     if dy == "résistance thermique" or "thermal impedance" in cap or yq.lower().startswith("z"):
