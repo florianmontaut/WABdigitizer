@@ -40,6 +40,9 @@ class TracedCurve:
     style: str = "plein"                  # « plein », « tirets », « pointillés »
     coverage: float = 1.0                 # part de la polyligne posée sur de l'encre
     width: float = 0.0                    # épaisseur, pixels
+    dash: float = 0.0                     # longueur des tirets (plein : inf)
+    label: str = ""                       # nom lu (légende ou étiquette), sinon « »
+    label_source: str = ""                # « légende », « étiquette », « proximité »
 
 
 @dataclass
@@ -47,6 +50,7 @@ class LegendEntry:
     style: str                            # style de l'échantillon
     text_box: tuple                       # (x0, y0, x1, y1) du texte à sa droite, pixels
     y: float = 0.0
+    dash: float = 0.0                     # longueur des tirets (plein : inf)
 
 
 @dataclass
@@ -54,6 +58,9 @@ class TraceResult:
     curves: list = field(default_factory=list)
     legend: list = field(default_factory=list)
     width: float = 0.0                    # épaisseur des courbes, pixels
+    words: list = field(default_factory=list)   # boîtes des textes du cadre (x0, y0, x1, y1)
+    labels: list = field(default_factory=list)  # textes lus hors légende (étiquettes)
+    label_boxes: list = field(default_factory=list)  # leurs boîtes
 
 
 @dataclass
@@ -319,10 +326,36 @@ def _leader(points, words, char) -> bool:
     return False
 
 
-def _style(coverage) -> str:
+def _measure(points, grown, width) -> tuple:
+    """
+    (style, part posée sur l'encre) : plein si presque tout est encré ; sinon tirets ou
+    pointillés selon la longueur médiane des traits encrés (pointillés : au plus 2,5 fois
+    l'épaisseur).
+    """
+    dash, coverage = dash_length(points, grown)
     if coverage > 0.9:
-        return "plein"
-    return "tirets" if coverage > 0.55 else "pointillés"
+        return "plein", coverage
+    return ("pointillés" if dash <= 2.5 * width + 2 else "tirets"), coverage
+
+
+def dash_length(points, grown) -> tuple:
+    """(longueur médiane des traits encrés, part encrée) le long de la polyligne ; plein : inf."""
+    r, c = _samples(points, grown.shape)
+    on = grown[r, c]
+    coverage = float(on.mean()) if len(on) else 0.0
+    if coverage > 0.9:
+        return float("inf"), coverage
+    runs = [b - a + 1 for a, b in _segments(on)]
+    return (float(np.median(runs)) if runs else 0.0), coverage
+
+
+def _segments(flags) -> list:
+    """Suites de True d'un vecteur : [(début, fin)]."""
+    idx = np.flatnonzero(flags)
+    if not len(idx):
+        return []
+    cuts = np.flatnonzero(np.diff(idx) > 1)
+    return list(zip(np.r_[idx[0], idx[cuts + 1]].tolist(), np.r_[idx[cuts], idx[-1]].tolist()))
 
 
 def _paint(shape, polylines, radius) -> np.ndarray:
@@ -393,7 +426,7 @@ def trace(image: np.ndarray, area) -> TraceResult:
               if w >= THIN * width]
     shades = [_darkness(p, dark, grown) for p, _, _ in tracks]
     darkest = min(shades) if shades else 0.0
-    result = TraceResult(width=width)
+    result = TraceResult(width=width, words=words)
     flat, raised = [], []
     for (p, w, is_steep), shade in zip(tracks, shades):
         # échantillon de légende : trait court et plat, juste à gauche d'un texte
@@ -402,7 +435,8 @@ def trace(image: np.ndarray, area) -> TraceResult:
         word = next((wd for wd in words if xmax - 0.5 * char <= wd[0] <= xmax + 1.5 * char
                      and wd[1] - 0.3 * char <= y <= wd[3] + 0.3 * char), None)
         if word is not None and xmax - xmin < 0.2 * span and np.ptp(p[:, 1]) < 0.5 * char:
-            result.legend.append(LegendEntry(_style(_coverage(p, grown)), word, y))
+            result.legend.append(LegendEntry(_measure(p, grown, width)[0], word, y,
+                                             dash_length(p, grown)[0]))
             continue
         # trait de rappel : nettement plus clair que la courbe la plus foncée, ou segment
         # droit contre un texte, plus fin ou plus clair que les courbes
@@ -416,8 +450,206 @@ def trace(image: np.ndarray, area) -> TraceResult:
             continue
         (raised if is_steep else flat).append(p)
     for p in _join(flat, raised, width):
-        cov = _coverage(p, grown)
-        result.curves.append(TracedCurve(p, _style(cov), cov, width))
+        style, cov = _measure(p, grown, width)
+        result.curves.append(TracedCurve(p, style, cov, width, dash_length(p, grown)[0]))
     result.curves.sort(key=lambda c: c.points[np.argmax(c.points[:, 0]), 1])
     result.legend.sort(key=lambda e: e.y)
     return result
+
+
+
+# ================================================================ noms des courbes
+def merge_words(words, char) -> list:
+    """Mots d'une même ligne séparés de moins d'un caractère (« IDS= » « 40A ») réunis."""
+    merged = []
+    for b in sorted(words, key=lambda b: b[0]):
+        for m in merged:
+            if abs((m[1] + m[3]) / 2 - (b[1] + b[3]) / 2) <= 0.4 * char \
+                    and -0.2 * char <= b[0] - m[2] <= 1.0 * char:
+                m[1], m[2], m[3] = min(m[1], b[1]), max(m[2], b[2]), max(m[3], b[3])
+                break
+        else:
+            merged.append(list(b))
+    return [tuple(m) for m in merged]
+
+
+def _distance(points, xy) -> float:
+    """Distance d'un point à une polyligne (à ses sommets, assez denses ici)."""
+    return float(np.min(np.hypot(points[:, 0] - xy[0], points[:, 1] - xy[1])))
+
+
+def name_curves(result: TraceResult, image: np.ndarray, area, symbols=()) -> list:
+    """
+    Noms des courbes lus dans l'image ; renseigne `label` et `label_source` de chaque
+    courbe et rend les mots lus non attribués. Ordre :
+      1. légende : chaque échantillon nomme la courbe de même style (seule de ce style, ou
+         dans l'ordre de haut en bas si la légende en a autant) ;
+      2. étiquette à trait de rappel : le trait, suivi depuis le texte, désigne la courbe
+         qu'il touche ;
+      3. étiquette posée près d'une courbe (à moins de deux caractères).
+    """
+    from . import labelread
+    char = area.char or 20
+    gray = np.asarray(image, dtype=float)[:, :, :3].mean(axis=2)
+    reader = labelread.Reader(gray)
+    pad = int(0.3 * char)
+    words = merge_words(result.words, char)
+
+    def read(box):
+        x0, y0, x1, y1 = box
+        return reader.read((x0 - pad, y0 - pad, x1 + pad, y1 + pad), symbols)
+    curves = result.curves
+    used_words = set()
+    # 1. légende
+    entries = []
+    for entry in result.legend:
+        box = next((w for w in words if w[0] <= entry.text_box[0] + 2
+                    and w[2] >= entry.text_box[2] - 2 and w[1] <= entry.y <= w[3]), entry.text_box)
+        word = read(box)
+        if word is not None:
+            entries.append((entry, word))
+            used_words.add(box)
+    _match_legend(entries, curves)
+    # mot de légende sans échantillon repéré (pointillés trop fins) : s'il reste une seule
+    # courbe libre et un seul mot aligné sur la colonne de la légende, ils vont ensemble
+    if entries:
+        x_col = np.median([w.box[0] for _, w in entries])
+        free_words = []
+        for box in words:
+            if box in used_words or abs(box[0] - x_col) > 1.5 * char:
+                continue
+            if not any(abs(box[1] - w.box[1]) < 0.5 * char for _, w in entries) and \
+                    min(abs(box[1] - w.box[1]) for _, w in entries) <= 2.5 * char:
+                word = read(box)
+                if word is not None and word.known:
+                    free_words.append((box, word))
+        free_curves = [c for c in curves if not c.label]
+        if len(free_words) == 1 and len(free_curves) == 1:
+            free_curves[0].label, free_curves[0].label_source = free_words[0][1].text, "légende"
+            used_words.add(free_words[0][0])
+    # 2. et 3. étiquettes
+    l, t, r, b = area.frame
+    painted = _paint(gray.shape, [c.points for c in curves], result.width + 1) if curves \
+        else np.zeros(gray.shape, bool)
+    ink, _ = ink_mask(image, area)
+    rest = ink & ~painted
+    for box in words:
+        if box in used_words:
+            continue
+        word = read(box)
+        if word is None:
+            continue
+        result.labels.append(word.text)
+        result.label_boxes.append(box)
+        x0, y0, x1, y1 = box
+        target = _leader_target(rest, box, curves, char, result.width)
+        source = "étiquette"
+        if target is None:
+            cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+            near = [(_distance(c.points, (cx, cy)), k) for k, c in enumerate(curves)]
+            near = [(d, k) for d, k in near if d <= 2 * char]
+            target = min(near)[1] if near else None
+            source = "proximité"
+        if target is not None and not curves[target].label:
+            curves[target].label, curves[target].label_source = word.text, source
+    return curves
+
+
+def _match_legend(entries, curves):
+    """
+    Échantillons de légende -> courbes : même ordre de longueur de tirets (plein, tirets
+    longs, courts, pointillés) ; à égalité (deux pleins), de haut en bas.
+    """
+    from scipy.optimize import linear_sum_assignment
+    if not entries:
+        return
+    free = [c for c in curves if not c.label]
+    if not free:
+        return
+
+    def key(dash):
+        return 12.0 if not np.isfinite(dash) else float(np.log2(max(dash, 1.0)))
+    cost = np.zeros((len(entries), len(free)))
+    for i, (entry, _) in enumerate(entries):
+        for j, curve in enumerate(free):
+            cost[i, j] = abs(key(entry.dash) - key(curve.dash))
+    # à égalité de style : l'ordre vertical départage (légende et courbes de haut en bas)
+    order_e = np.argsort([e.y for e, _ in entries]).argsort() / max(len(entries), 1)
+    order_c = np.argsort([c.points[np.argmax(c.points[:, 0]), 1] for c in free]).argsort() \
+        / max(len(free), 1)
+    cost += 0.1 * np.abs(order_e[:, None] - order_c[None, :])
+    rows, cols = linear_sum_assignment(cost)
+    for i, j in zip(rows, cols):
+        if cost[i, j] <= 1.2:              # longueurs de tirets du même ordre
+            free[j].label, free[j].label_source = entries[i][1].text, "légende"
+
+
+def _leader_target(rest, box, curves, char, width):
+    """
+    Courbe désignée par le trait de rappel qui part du texte (None sans trait) : le trait
+    est prolongé en ligne droite au-delà des courbes qu'il croise, jusqu'à son vrai bout.
+    """
+    if not curves:
+        return None
+    x0, y0, x1, y1 = box
+    m = int(max(3, 1.0 * char))            # le trait commence à quelques pixels du texte
+    window = np.zeros(rest.shape, bool)
+    window[max(y0 - m, 0):y1 + m, max(x0 - m, 0):x1 + m] = True
+    labels, n = ndimage.label(rest, structure=np.ones((3, 3)))
+    if not n:
+        return None
+    touching = set(np.unique(labels[window & rest])) - {0}
+    all_pts = np.column_stack(np.nonzero(rest)[::-1]).astype(float)     # (x, y)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    best = None
+    for k in touching:
+        rr, cc = np.nonzero(labels == k)
+        inside = (cc >= x0 - 1) & (cc <= x1 + 1) & (rr >= y0 - 1) & (rr <= y1 + 1)
+        rr, cc = rr[~inside], cc[~inside]
+        if len(rr) < char:                 # trop court pour un trait de rappel
+            continue
+        pts = np.column_stack([cc, rr]).astype(float)
+        # départ du trait : son point le plus proche du bord droit du mot, à mi-hauteur
+        # (le trait d'une étiquette voisine peut passer tout près)
+        gap = float(np.min(np.hypot(pts[:, 0] - x1, pts[:, 1] - (y0 + y1) / 2)))
+        followed = _follow(pts, all_pts, (cx, cy), width)
+        if followed is None:
+            continue                       # pas une droite
+        end = followed
+        d, i = min((_distance(c.points, end), i) for i, c in enumerate(curves))
+        # le trait qui part au plus près du texte
+        if d <= 2 * width + 4 and (best is None or gap < best[0]):
+            best = (gap, i)
+    return None if best is None else best[1]
+
+
+def _follow(pts, all_pts, origin, width):
+    """
+    Bout d'un trait droit, prolongé morceau par morceau au-delà des croisements (direction
+    réajustée à chaque morceau) ; None si le premier morceau n'est pas droit.
+    """
+    pts = pts.copy()
+    for step in range(30):
+        center = pts.mean(axis=0)
+        _, _, vt = np.linalg.svd(pts - center, full_matrices=False)
+        direction = vt[0]
+        if np.dot(center - origin, direction) < 0:
+            direction = -direction         # du texte vers la courbe
+        normal = np.array([-direction[1], direction[0]])
+        if step == 0 and np.abs((pts - center) @ normal).max() > 2.0:
+            return None
+        reach = ((pts - center) @ direction).max()
+        rel = all_pts - center
+        along, across = rel @ direction, np.abs(rel @ normal)
+        # saut permis : une courbe effacée (épaisseur + marges) entre deux morceaux
+        ahead = (along > reach + 0.5) & (along <= reach + 3 * width + 12) & (across <= 2.0)
+        if not ahead.any():
+            break
+        nxt = along[ahead].min()
+        chunk = ahead & (along <= nxt + 3 * width) | ((along > reach) & (along <= nxt + 3 * width)
+                                                    & (across <= 2.0))
+        pts = np.vstack([pts, all_pts[chunk]])
+    center = pts.mean(axis=0)
+    _, _, vt = np.linalg.svd(pts - center, full_matrices=False)
+    direction = vt[0] if np.dot(center - origin, vt[0]) >= 0 else -vt[0]
+    return center + ((pts - center) @ direction).max() * direction

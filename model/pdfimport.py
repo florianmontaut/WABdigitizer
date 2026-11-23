@@ -1266,7 +1266,7 @@ def _build(path, found, dpi=200) -> list:
                 crop = np.ascontiguousarray(image[r0:r1, c0:c1])
                 area = plotimage.find_plot(crop)
                 if area is not None:      # sinon : dessin, photo... pas un graphique
-                    out.append(_interpret_raster(g, crop, area, f"{path.name} p.{g.page}"))
+                    out += _interpret_raster(g, crop, area, f"{path.name} p.{g.page}")
                 continue
 
             def to_pixels(points, c0=c0, r0=r0, left=left, top=top):
@@ -1393,7 +1393,7 @@ def _interpret(g, image, calibration, to_pixels, source) -> list:
 SYMBOL_UNITS = {"V": "V", "I": "A", "T": "°C", "P": "W"}
 
 
-def _interpret_raster(g, image, area, source) -> DraftGraph:
+def _interpret_raster(g, image, area, source) -> list:
     """
     Graphique en image : nom, conditions et type d'après la légende de la figure ; axes
     d'après « Y = f(X) » ; calibration sur les graduations lues ; courbes relevées
@@ -1423,29 +1423,140 @@ def _interpret_raster(g, image, area, source) -> DraftGraph:
     else:
         missing = [axis for axis, v in (("X", values["x1"]), ("Y", values["y1"])) if v is None]
         warnings.append(f"graduations {' et '.join(missing)} non lues : valeurs à saisir")
-    graph = Graph(name=title, image=image, source=source)
-    graph.x_axis = Axis(datasheet.plain(xq), xu)
-    graph.y_axis = Axis(datasheet.plain(yq), yu)
-    traced = curvetrace.trace(image, area).curves
-    m = TEMPERATURE.search(", ".join(conditions))
-    datasets = []
-    for k, curve in enumerate(traced or [None]):
-        name = f"Courbe {k + 1}" + (f" ({curve.style})" if curve is not None else "")
-        dataset = Dataset(name=name, condition=", ".join(conditions),
-                          pixels=curve.points.copy() if curve is not None else np.empty((0, 2)))
+    param = datasheet.parameter(" ".join(caption))
+    symbols = [datasheet.plain(x) for x in [sym for sym, _ in pairs] + [param, xq, yq] if x]
+    result = curvetrace.trace(image, area)
+    curvetrace.name_curves(result, image, area, tuple(dict.fromkeys(symbols)))
+    traced = result.curves
+    labels = [c.label for c in traced]
+    if kind in ("output", "diode", "transfer"):
+        family = _label_family(result.labels, result.label_boxes, area.char)
+        if family is not None:
+            symbol, values, unit = family
+            chosen = sorted(range(len(traced)), key=lambda i: -np.ptp(traced[i].points[:, 0]))
+            chosen = chosen[:len(values)]
+            magnitudes = _magnitudes([traced[i].points for i in chosen])
+            assigned = datasheet.assign_range(magnitudes, values)
+            if assigned is not None:
+                for i in range(len(traced)):
+                    if labels[i] and traced[i].label_source != "légende":
+                        labels[i] = ""
+                for i, value in zip(chosen, assigned):
+                    text = datasheet.format_value(value, unit).replace("−", "-")
+                    labels[i] = f"{symbol} = {text}" if symbol else text
+                what = (f"{symbol} = " if symbol else "") + ", ".join(f"{v:g}" for v in values) \
+                    + f" {unit}"
+                warnings.append(f"valeurs lues « {what} » attribuées dans l'ordre du courant : "
+                                "à vérifier")
+    named = sum(bool(x) for x in labels)
+    t_symbol = "Tvj" if re.search(r"\bT_?vj", " ".join(caption)) else "Tj"
+    curves = []
+    for k, curve in enumerate(traced):
+        label = datasheet.clean(labels[k])
+        if re.match(r"^[−-]?\d+(?:[.,]\d+)?\s*°C$", label):
+            label = f"{t_symbol} = {label}"         # « 25°C » : température de jonction
+        own = datasheet.curve_condition(label, param)
+        present = {datasheet.plain(sym).lower() for sym, _ in PAIR.findall(own)}
+        extra = [c for (sym, _), c in zip(pairs, conditions)
+                 if datasheet.plain(sym).lower() not in present]
+        condition = datasheet.plain(", ".join(([own] if own else []) + extra))
+        name = datasheet.plain(own) or f"Courbe {k + 1} ({curve.style})"
+        dataset = Dataset(name=name, condition=condition if "=" in condition else "",
+                          pixels=curve.points.copy())
+        m = TEMPERATURE.search(condition)
         if m:
             dataset.temperature = float(m.group(1).replace("−", "-").replace(",", "."))
-        dataset.color = PALETTE[k % len(PALETTE)]
-        datasets.append(dataset)
+        energy = datasheet.energy_kind(label) or ""
+        curves.append((dataset, energy))
     if traced:
-        warnings.append(f"{len(traced)} courbe(s) relevée(s) automatiquement dans l'image "
-                        "(noms, croisements, courbes proches) : à vérifier")
+        warnings.append(f"{len(traced)} courbe(s) relevée(s) automatiquement dans l'image, "
+                        f"{named} nommée(s) (légende, étiquettes) : à vérifier")
     else:
         warnings.append("aucune courbe relevée : à relever dans l'application")
-    graph.set_calibration(calibration)
-    graph.datasets = datasets          # après la calibration : ordre de la polyligne gardé
-    diode = datasheet.diode_graph(" ".join(caption), xq, yq)
-    return DraftGraph(graph, g, kind, "", diode, "", conditions, warnings, plot=area)
+    # énergies de fermeture et d'ouverture sur un même graphique : un graphique chacune
+    groups = {}
+    for dataset, energy in curves:
+        groups.setdefault(energy if kind == "energy" else "", []).append(dataset)
+    if len(groups) > 1:
+        warnings.append("énergies séparées en " + ", ".join(
+            f"E{e}" if e else "sans nom" for e in groups) + " (même image)")
+    diode = datasheet.diode_graph(" ".join(caption), xq, yq, labels)
+    out = []
+    for energy, datasets in (groups.items() if groups else [("", [])]):
+        split = len(groups) > 1
+        part = Graph(name=f"{title} — E{energy or '?'}" if split else title,
+                     image=image, source=source)
+        part.x_axis = Axis(datasheet.plain(xq), xu)
+        part.y_axis = Axis(f"E{energy}" if split and energy else datasheet.plain(yq), yu)
+        for k, dataset in enumerate(datasets):
+            dataset.color = PALETTE[k % len(PALETTE)]
+        part.set_calibration(calibration)
+        part.datasets = datasets or [Dataset(name="Courbe 1", color=PALETTE[0])]
+        out.append(DraftGraph(part, g, kind, energy, diode, "", conditions, list(warnings),
+                              plot=area))
+    return out
+
+
+def _label_family(texts, boxes=(), char=20.0):
+    """
+    Valeurs d'un même paramètre lues dans les étiquettes (« 19V », « 17V »... ou
+    « VGS=15V », « VGS=0V », « -5V ») : (symbole, valeurs triées, unité), au moins deux.
+    Étiquettes empilées en colonne, à intervalles réguliers : leurs valeurs doivent former
+    une suite régulière (comme des graduations) ; une étiquette mal lue est corrigée.
+    """
+    groups = {}
+    boxes = list(boxes) or [None] * len(texts)
+    for text, box in zip(texts, boxes):
+        m = re.match(r"^(?:([A-Za-z][\w()]*)\s*=\s*)?([−-]?\d+(?:[.,]\d+)?)\s*([A-Za-zµ°Ω/]+)$",
+                     (text or "").strip())
+        if m:
+            symbol, value, unit = m.groups()
+            groups.setdefault(unit, []).append(
+                (symbol, float(value.replace("−", "-").replace(",", ".")), box))
+    if not groups:
+        return None
+    unit, items = max(groups.items(), key=lambda kv: len(kv[1]))
+    values = sorted({v for _, v, _ in items})
+    column = [it for it in items if it[2] is not None]
+    if len(column) >= 3 and np.ptp([it[2][0] for it in column]) <= char:
+        column.sort(key=lambda it: it[2][1])
+        seq = plotimage.tick_sequence([f"{v:g}" for _, v, _ in column],
+                                      [(it[2][1] + it[2][3]) / 2 for it in column])
+        if seq is not None and not seq[2]:
+            first, last = seq[0], seq[1]
+            values = sorted(float(f"{v:.10g}") for v in np.linspace(first, last, len(column)))
+    if len(values) < 2:
+        return None
+    symbols = [sym for sym, _, _ in items if sym]
+    symbol = max(set(symbols), key=symbols.count) if symbols else ""
+    return symbol, values, unit
+
+
+def _magnitudes(polylines) -> list:
+    """
+    Rang de chaque courbe en amplitude, par comparaison deux à deux sur leur intervalle
+    commun (plus haut dans l'image = plus grand) : une courbe qui sort tôt du cadre, ou
+    deux courbes proches comparées là où une troisième vaut presque zéro, restent bien
+    rangées. Rend un score par courbe (plus grand = plus grande amplitude).
+    """
+    def at(p, xs):
+        order = np.argsort(p[:, 0])
+        return np.interp(xs, p[order, 0], p[order, 1])
+    scores = [0.0] * len(polylines)
+    for i, a in enumerate(polylines):
+        for j, b in enumerate(polylines):
+            if j <= i:
+                continue
+            lo = max(a[:, 0].min(), b[:, 0].min())
+            hi = min(a[:, 0].max(), b[:, 0].max())
+            if hi - lo < 5:
+                diff = float(np.mean(b[:, 1]) - np.mean(a[:, 1]))
+            else:
+                xs = np.linspace(lo, hi, 50)
+                diff = float(np.mean(at(b, xs) - at(a, xs)))
+            scores[i] += np.sign(diff)     # a plus haut que b : a plus grand
+            scores[j] -= np.sign(diff)
+    return scores
 
 
 def _assign_parts(graphs, category) -> list:
@@ -1455,7 +1566,7 @@ def _assign_parts(graphs, category) -> list:
     for dg in graphs:
         dg.part = "Diode" if module and dg.diode else parts[0]
         temperatures = [d.temperature for d in dg.graph.datasets]
-        dg.graph.plecs_role = "" if dg.plot is not None else datasheet.plecs_role(
+        dg.graph.plecs_role = "" if not dg.graph.calibrated else datasheet.plecs_role(
             dg.kind, temperatures, dg.energy, diode_part=module and dg.diode)
     return parts
 

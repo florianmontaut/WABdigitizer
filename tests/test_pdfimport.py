@@ -243,3 +243,19 @@ def test_graphique_en_image_sans_lecture(tmp_path, monkeypatch):
     assert any("non lues" in w for w in dg.warnings)
     draft.calibrate(0, 0, 6, 0, 60)
     assert dg.graph.calibrated
+
+
+def test_valeurs_des_etiquettes_dans_l_ordre():
+    # étiquettes empilées à pas régulier : une mal lue (« 1V » pour « 11V ») est corrigée
+    texts = ["19V", "17V", "15V", "13V", "1V", "9V", "7V"]
+    boxes = [(10, 40 + 42 * k, 40, 60 + 42 * k) for k in range(7)]
+    assert pdfimport._label_family(texts, boxes, 22) == ("", [7, 9, 11, 13, 15, 17, 19], "V")
+    assert pdfimport._label_family(["VGS=15V", "VGS=0V", "-5V"]) == ("VGS", [-5, 0, 15], "V")
+    assert pdfimport._label_family(["Eon"]) is None
+    # rang par comparaison deux à deux : la courbe qui sort tôt du cadre reste la plus haute
+    x = np.arange(0, 100, 1.0)
+    early = np.column_stack([x[:30], 300 - 8 * x[:30]])   # monte vite, sort à x = 30
+    late = np.column_stack([x, 300 - 2 * x])
+    low = np.column_stack([x, 300 - x])
+    scores = pdfimport._magnitudes([low, early, late])
+    assert scores[1] > scores[2] > scores[0]

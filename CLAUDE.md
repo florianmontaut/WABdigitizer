@@ -88,7 +88,10 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     `_build` les écarte si `plotimage.find_plot` ne trouve rien, sinon
     `_interpret_raster` (légende, axes par `datasheet.function_axes`, `DraftGraph.plot`,
     calibré sur les valeurs lues s'il y en a, courbes relevées par `curvetrace.trace`,
-    posées après la calibration pour garder l'ordre des polylignes).
+    nommées par `curvetrace.name_curves`, posées après la calibration pour garder l'ordre
+    des polylignes ; famille de valeurs d'un paramètre (`_label_family` : suite régulière
+    si les étiquettes sont empilées) attribuée par `datasheet.assign_range` sur un rang
+    deux à deux (`_magnitudes`) ; Eon / Eoff séparés, rôles PLECS si calibré).
     `Draft.calibrate(i, x1, x2, y1, y2, log)` : valeurs saisies -> calibration
     orthonormée sur `PlotArea.markers()`. Légendes : `_match_captions` choisit les paires
     de la moins chère à la plus chère (écart vertical + largeur non recouverte) ;
@@ -113,7 +116,17 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     franchis), depuis le côté le plus encombré ; parties raides ligne par ligne sur
     l'encre restante, raccordées (`_join`) ; tri : traits de rappel (plus clairs, ou
     droits contre un texte et plus fins), grille, échantillons de légende
-    (`LegendEntry`, gardés pour nommer) ; style par la part posée sur l'encre.
+    (`LegendEntry`) ; style par la longueur des traits encrés (`dash_length`).
+    `name_curves` : légende (appariement par longueur de tirets puis ordre vertical,
+    `_match_legend` ; mot de légende orphelin -> dernière courbe libre), étiquettes à
+    trait de rappel (`_leader_target` / `_follow` : trait prolongé morceau par morceau
+    au-delà des courbes qu'il croise), sinon proximité.
+  - `labelread.py` : lecture des petits textes d'une image sans moteur d'OCR : caractères
+    (composantes connexes, points de i / j et barres de « = » rattachés ; « . », « - »,
+    « = », « ° » par leur forme ; indices par la taille) comparés aux modèles des polices
+    (`_templates`), mot confronté au vocabulaire (`NAMES`, « nombre unité »,
+    « symbole = nombre unité », unité cohérente avec la lettre du symbole), motifs rangés
+    par signature ; jusqu'à deux débris ignorés ; caractère large coupé en deux (« ff »).
   - `plotimage.py` : graphique en image : `find_plot` -> `PlotArea` (cadre = traits de
     grille de même étendue, graduations = premières bandes d'encre sous le cadre et à sa
     gauche, découpées en étiquettes, prolongées à gauche sans le titre tourné ;
@@ -171,7 +184,7 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   `set_dirty()` ; l'étoile du titre = hors pile ou pile non propre.
 - `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_compare.py`, `test_zoom.py`,
   `test_library.py`, `test_pdfimport.py`, `test_datasheet.py`, `test_plotimage.py`,
-  `test_curvetrace.py`,
+  `test_curvetrace.py` (relevé, légende, lecture des mots),
   `test_gui.py`
   (contrôleurs sans écran).
 
@@ -211,10 +224,11 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   « MOSFET with Diode », modèle de Cauer, ajustement de Foster sur une courbe Zth(t).
 
 - Import PDF (J0 à J4 faits) : graphiques en image : graduations en exposant (10^n) non
-  lues ; courbes nommées par rang et style (pas encore par la légende ni les étiquettes
-  « 19V ») ; courbes qui se touchent longtemps (réseau de sortie près de l'origine) ou
+  lues ; étiquettes à trait de rappel d'un réseau dense mal suivies (d'où l'attribution
+  par l'ordre du courant) ; légendes à trait de rappel (Fig. 5 IMW) ; courbes qui se
+  touchent longtemps (réseau de sortie près de l'origine) ou
   presque superposées (temps de commutation) mal séparées ; outil « suivre la courbe au
-  clic » à faire ; relevé ~0,2 s par graphique (à paralléliser si besoin) ; unités des
+  clic » à faire ; relevé et noms ~0,35 s par graphique (à paralléliser si besoin) ; unités des
   axes devinées seulement pour V, A, °C, W. Faible sur
   les datasheets anciennes tout en noir (FF300R12KT4 : pointillés tiret par tiret,
   légendes sans numéro, Ω de la police Symbol lu « W ») ; caractères sans Unicode

@@ -176,9 +176,12 @@ def fix_symbols(text: str, known=()) -> str:
 
 # ================================================================ conditions
 def parameter(text: str):
-    """Symbole du paramètre des courbes : « parameter: V_GS » -> « V_GS »."""
+    """Symbole du paramètre des courbes : « parameter: V_GS », « V_GS as parameter »."""
     m = re.search(r"param(?:eter|ètre)\s*:?\s*([A-Za-z][\w(),]*)", text or "", re.I)
-    return m.group(1) if m else None
+    if m and m.group(1).lower() not in ("as", "en"):
+        return m.group(1)
+    m = re.search(r"([A-Za-z][\w(),]*)\s+(?:as|en|comme)\s+param", text or "", re.I)
+    return m.group(1) if m else None              # « V_GS as parameter »
 
 
 BARE = re.compile(r"^" + VALUE + r"\s*([a-zA-Zµ°Ω/]*)$")

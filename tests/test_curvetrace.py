@@ -72,3 +72,59 @@ def test_rien_a_relever():
     blank = image.copy()
     blank[t + 3:b - 2, l + 3:r - 2] = 255                 # zone de tracé vidée
     assert curvetrace.trace(blank, area).curves == []
+
+
+def legend_chart():
+    """Graphique d'énergies à légende (trait plein « Eoff », tirets « Eon »), style Excel."""
+    import io
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(4, 4), dpi=150)
+    ax.plot(X, 5 + 2 * X, "k-", lw=2, label="Eoff")
+    ax.plot(X, 20 + 6 * X, "k--", lw=2, label="Eon")
+    ax.set_xlim(0, 6)
+    ax.set_ylim(0, 60)
+    ax.grid(True, color="0.75")
+    ax.tick_params(length=0)
+    ax.legend(loc="upper left", frameon=False, fontsize=9)
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="rgba", dpi=150)
+    w, h = fig.canvas.get_width_height()
+    image = np.frombuffer(buffer.getvalue(), np.uint8).reshape(h, w, 4)[:, :, :3].copy()
+    plt.close(fig)
+    return image
+
+
+def test_noms_par_la_legende():
+    image = legend_chart()
+    area = plotimage.find_plot(image)
+    result = curvetrace.trace(image, area)
+    assert len(result.legend) == 2                       # échantillons écartés des courbes
+    curves = curvetrace.name_curves(result, image, area)
+    names = {c.style: c.label for c in curves}
+    assert names == {"tirets": "Eon", "plein": "Eoff"}
+    assert all(c.label_source == "légende" for c in curves)
+
+
+def test_lecture_des_mots():
+    """Mots dessinés (police de matplotlib) : vocabulaire, nombres et unités, indices."""
+    import io
+    import matplotlib.pyplot as plt
+    from model import labelread
+    texts = ["Eoff", "td(on)", "19V", "25°C", "IDS=40A"]
+    fig = plt.figure(figsize=(3, 3), dpi=150)
+    for k, text in enumerate(texts):
+        fig.text(0.1, 0.85 - 0.18 * k, text, fontsize=11)
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="rgba", dpi=150)
+    w, h = fig.canvas.get_width_height()
+    gray = np.frombuffer(buffer.getvalue(), np.uint8).reshape(h, w, 4)[:, :, :3].mean(axis=2)
+    plt.close(fig)
+    rows = np.flatnonzero((gray < 128).any(axis=1))
+    bands = np.split(rows, np.flatnonzero(np.diff(rows) > 3) + 1)
+    reader = labelread.Reader(gray)
+    read = []
+    for band in bands:
+        cols = np.flatnonzero((gray[band[0]:band[-1] + 1] < 128).any(axis=0))
+        word = reader.read((cols[0] - 4, band[0] - 4, cols[-1] + 5, band[-1] + 5))
+        read.append(word.text if word else None)
+    assert read == texts

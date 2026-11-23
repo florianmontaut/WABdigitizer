@@ -121,10 +121,16 @@ lue (en gris), une saisie la remplace. Lecture incohérente : valeurs à saisir 
 import sans calibration). Les **courbes sont relevées automatiquement** (sans GPU, environ
 0,2 s par graphique) : suivi colonne par colonne, croisements, tirets et pointillés
 reliés en une seule polyligne, parties raides (flanc d'une SOA) ; texte, traits de rappel
-des étiquettes, échantillons de légende et grille écartés. Nommées « Courbe 1 (plein) »,
-« Courbe 2 (tirets) »... de haut en bas, à vérifier : courbes qui se touchent sur une
-longue distance ou presque superposées (fusionner, séparer, reprendre au pinceau). Pas
-de rôle PLECS proposé.
+des étiquettes, échantillons de légende et grille écartés. **Courbes nommées** d'après
+l'image : la **légende** (échantillon de trait + texte : « Eoff », « Ciss », « 25°C »,
+appariés par le style du trait), les **étiquettes** à trait de rappel (le trait est suivi
+jusqu'à la courbe) ; les valeurs d'un paramètre (« 19V »… « 7V », « VGS=0V ») sont
+attribuées dans l'ordre du courant (sortie, transfert, diode), à vérifier. Textes lus
+sans moteur d'OCR (caractères comparés aux polices du système, mots confrontés à un
+vocabulaire). Le sens suit : « VGS = 19 V » (paramètre de la légende de la figure), Tj
+(« 25°C »), Eon / Eoff séparés et rôles PLECS proposés. Sinon « Courbe 1 (plein) »…
+À vérifier : courbes qui se touchent longtemps ou presque superposées (fusionner,
+séparer, reprendre au pinceau).
 
 Limites : PDF scanné (rien n'est lu) ; courbes de même style
 sans étiquette (à nommer) ; étiquettes absentes à la source (ST : seulement les courbes

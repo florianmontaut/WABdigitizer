@@ -123,3 +123,9 @@ def test_axes_d_apres_la_legende():
     assert ds.classify("Tvj", "°C", "E", "", "switching energy losses") == "energy_other"
     assert ds.classify("VSD", "V", "ISD", "A", "body diode forward current") == "diode"
     assert ds.expand_range("R_G,ext = 2, 5, 10 Ω")[0] == "R_G,ext"
+
+
+def test_parametre_en_toutes_lettres():
+    assert ds.parameter("Typical output characteristic, V_GS as parameter") == "V_GS"
+    assert ds.parameter("(I_D = f(V_DS)), parameter: V_GS") == "V_GS"
+    assert ds.parameter("Typical switching losses") is None
