@@ -15,6 +15,7 @@ from qtsocle import theme
 
 from . import properties, zoom
 from .canvas import ImageCanvas, Mode
+from .detached_window import DetachedWindow
 from .library_panel import LibraryPanel
 
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff")
@@ -122,6 +123,12 @@ class MainWindow(QtWidgets.QMainWindow):
                              "Ctrl+Shift+J")
         self.actionDelete = a("Supprimer la sélection", "trash",
                               "Supprimer le graphique ou la courbe sélectionné")
+        self.actionDetachPreview = a("Détacher l'aperçu", "detach",
+                                     "Aperçu en unités physiques dans sa propre fenêtre "
+                                     "(la fermer le remet sous l'image)")
+        self.actionDetachLibrary = a("Détacher la librairie", "detach",
+                                     "Librairie dans sa propre fenêtre (la fermer la remet "
+                                     "dans la fenêtre principale)")
         self.actionOptions = a("Options...", "settings", "Options de l'application")
         self.actionDark = a("Thème sombre", "moon", checkable=True)
         self.actionCompare = a("Comparer des composants...", "compare",
@@ -197,6 +204,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 menu.addSeparator()
             else:
                 menu.addAction(act)
+        menu = self.menuBar().addMenu("&Affichage")
+        menu.addAction(self.actionDetachPreview)
+        menu.addAction(self.actionDetachLibrary)
         menu = self.menuBar().addMenu("&Outils")
         menu.addAction(self.actionCompare)
         menu = self.menuBar().addMenu("&Édition")
@@ -224,7 +234,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.preview_plot.showGrid(x=True, y=True, alpha=0.3)
         self.preview_plot.addLegend(offset=(-10, 10))
         zoom.limit_empty(self.preview_plot)              # bornée dès l'ouverture
+        menu = self.preview_plot.vb.menu
+        menu.addSeparator()
+        menu.addAction(self.actionDetachPreview)
         center = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self.center = center
         center.addWidget(self.canvas)
         center.addWidget(self.preview)
         center.setStretchFactor(0, 3)
@@ -258,13 +272,24 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.library = LibraryPanel([self.actionPublish, None, self.actionLibraryOpen,
                                      self.actionLibraryCompare, self.actionLibraryRemove, None,
-                                     self.actionLibraryReveal, self.actionLibraryReload])
+                                     self.actionLibraryReveal, self.actionLibraryReload, None,
+                                     self.actionDetachLibrary])
         dock = QtWidgets.QDockWidget("Librairie", self)
         dock.setObjectName("library_dock")
+        # pas de dock flottant (petite fenêtre toujours au-dessus) : « Détacher la librairie »
+        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable
+                         | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable)
         dock.setWidget(self.library)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.BottomDockWidgetArea, dock)
         self.resizeDocks([dock], [200], QtCore.Qt.Orientation.Vertical)    # l'image d'abord
         self.library_dock = dock
+        # panneaux détachés : fenêtres créées au premier détachement, puis réutilisées
+        self.preview_window = None
+        self.library_window = None
+        self._preview_sizes = None
+        self.actionDetachPreview.triggered.connect(self.toggle_preview)
+        self.actionDetachLibrary.triggered.connect(self.toggle_library)
+        self.closing.connect(self.attach_all)
 
     # ============================================================ affichage
     def add_history_actions(self, undo: QtGui.QAction, redo: QtGui.QAction):
@@ -280,6 +305,86 @@ class MainWindow(QtWidgets.QMainWindow):
         self.editMenu.insertActions(first, [undo, redo])
         self.editMenu.insertSeparator(first)
         self.actionUndo, self.actionRedo = undo, redo
+
+    # ============================================================ panneaux détachés
+    def shared_actions(self) -> list:
+        """Raccourcis actifs aussi dans les fenêtres détachées."""
+        return [a for a in (getattr(self, "actionUndo", None), getattr(self, "actionRedo", None),
+                            self.actionSave, self.actionQuit) if a is not None]
+
+    def _window(self, current, size, attach):
+        """Fenêtre détachée existante (réutilisée) ou nouvelle ; sa croix appelle attach."""
+        if current is not None:
+            return current
+        window = DetachedWindow(self, size)
+        window.addActions(self.shared_actions())
+        window.closed.connect(attach)
+        return window
+
+    @property
+    def preview_detached(self) -> bool:
+        return self.preview_window is not None and self.preview_window.content is not None
+
+    @property
+    def library_detached(self) -> bool:
+        return self.library_window is not None and self.library_window.content is not None
+
+    def toggle_preview(self):
+        self.attach_preview() if self.preview_detached else self.detach_preview()
+
+    def toggle_library(self):
+        self.attach_library() if self.library_detached else self.detach_library()
+
+    def detach_preview(self):
+        """Aperçu en unités physiques dans sa fenêtre ; l'image prend toute la hauteur."""
+        if self.preview_detached:
+            return
+        self._preview_sizes = self.center.sizes()
+        self.preview_window = self._window(self.preview_window, (1000, 500), self.attach_preview)
+        app = QtWidgets.QApplication.applicationName()
+        self.preview_window.assign(self.preview, f"Aperçu en unités physiques — {app}")
+        self.actionDetachPreview.setText("Réintégrer l'aperçu")
+        self.preview_window.show()
+        self.preview_window.raise_()
+
+    def attach_preview(self, *_):
+        """Aperçu remis sous l'image, à sa hauteur d'avant."""
+        if not self.preview_detached:
+            return
+        widget = self.preview_window.release()
+        self.center.insertWidget(1, widget)
+        if self._preview_sizes:
+            self.center.setSizes(self._preview_sizes)
+        self.actionDetachPreview.setText("Détacher l'aperçu")
+
+    def detach_library(self):
+        """Panneau de la librairie dans sa fenêtre ; le dock est masqué."""
+        if self.library_detached:
+            return
+        self.library_window = self._window(self.library_window, (1100, 450), self.attach_library)
+        self.library.setParent(None)
+        self.library_dock.hide()
+        self.actionLibraryPanel.setEnabled(False)
+        app = QtWidgets.QApplication.applicationName()
+        self.library_window.assign(self.library, f"Librairie — {app}")
+        self.actionDetachLibrary.setText("Réintégrer la librairie")
+        self.library_window.show()
+        self.library_window.raise_()
+
+    def attach_library(self, *_):
+        """Librairie remise dans son dock."""
+        if not self.library_detached:
+            return
+        widget = self.library_window.release()
+        self.library_dock.setWidget(widget)
+        self.library_dock.show()
+        self.actionLibraryPanel.setEnabled(True)
+        self.actionDetachLibrary.setText("Détacher la librairie")
+
+    def attach_all(self):
+        """Fermeture de la fenêtre principale : panneaux réintégrés, fenêtres masquées."""
+        self.attach_preview()
+        self.attach_library()
 
     def refresh_theme(self):
         """Couleurs des graphiques : à rappeler après theme.apply()."""

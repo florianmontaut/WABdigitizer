@@ -177,6 +177,12 @@ Panneau « Librairie » sous la fenêtre (`Ctrl+L` pour l'afficher ou le masquer
 Librairie. Le dossier est l'option Général › « Répertoire de la librairie » (un partage
 réseau pour une librairie commune).
 
+**Fenêtres détachées** (menu Affichage, ou menu contextuel de l'aperçu / de la
+librairie) : l'aperçu en unités physiques et la librairie peuvent passer dans leur propre
+fenêtre (barre des tâches, plein écran, second écran) ; fermer cette fenêtre les remet à
+leur place. Annuler, Refaire, Enregistrer et Quitter y restent actifs ; la position et la
+taille sont gardées pendant la session.
+
 ```
 <librairie>/<Catégorie>/<Référence>.json         fiche (lue par le logiciel de dimensionnement)
 <librairie>/<Catégorie>/<Référence>.pdig.json    projet source : image, calibration, masques

@@ -168,6 +168,14 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   par `MainWindow`) + `controller/library_controller.py` (lecture, table filtrée et triée,
   sélection). Publier, ouvrir, comparer, supprimer : `MainController` (`publish`,
   `library_*`), questions par `view.ask` (sans écran : `view.answer`, `last_question`).
+- `view/detached_window.py` (repris de GLviewer `view/detached_graph_window.py`) : panneau
+  détaché dans une vraie fenêtre (enfant de la fenêtre principale, `WA_QuitOnClose`
+  faux) ; la croix refuse la fermeture et émet `closed` -> panneau réintégré, fenêtre
+  masquée et réutilisée. `MainWindow.detach_preview` / `attach_preview` (le `PlotWidget`
+  quitte le partage `center`, hauteurs remises au retour), `detach_library` /
+  `attach_library` (panneau sorti du dock, dock masqué, `actionLibraryPanel` grisée ; dock
+  sans mode flottant), `attach_all` sur `closing` ; raccourcis partagés
+  (`shared_actions`). Pas de mémorisation entre sessions.
 - `view/zoom.py` (repris de loggerFPGA `logger_app/ressources/zoom.py`) : limites de zoom
   par `ViewBox.setLimits`, sans quoi un dézoom infini fait planter pyqtgraph. Image :
   `limit_image` (étendue ≤ 4 × sa plus grande dimension, zoom jusqu'à 2 pixels), dans

@@ -1036,3 +1036,35 @@ def test_selection_multiple_ctrl_et_maj(ctrl):
     ctrl.add_dataset()                                     # ajout : la nouvelle seule
     assert ctrl.selected_curves() == [(0, 5)]
     tree.hide()
+
+
+def test_apercu_et_librairie_detaches(ctrl):
+    view = ctrl.view
+    calibrated(ctrl)
+    preview = view.preview
+    assert view.center.indexOf(preview) == 1 and not view.preview_detached
+    # aperçu détaché : dans sa fenêtre, l'image seule dans le partage
+    view.actionDetachPreview.trigger()
+    assert view.preview_detached and view.center.indexOf(preview) == -1
+    assert preview.window() is view.preview_window
+    assert view.actionDetachPreview.text() == "Réintégrer l'aperçu"
+    assert view.actionUndo in view.preview_window.actions()    # raccourcis partagés
+    ctrl.refresh_preview()                                     # toujours dessiné
+    # la croix réintègre l'aperçu, la fenêtre reste pour la fois suivante
+    window = view.preview_window
+    window.close()
+    assert not view.preview_detached and view.center.indexOf(preview) == 1
+    assert not window.isVisible()
+    view.detach_preview()
+    assert view.preview_window is window and view.preview_detached
+    # librairie détachée : le dock est masqué, la commande du dock grisée
+    view.actionDetachLibrary.trigger()
+    assert view.library_detached and view.library.window() is view.library_window
+    assert not view.library_dock.isVisible() and not view.actionLibraryPanel.isEnabled()
+    view.library_window.close()
+    assert view.library_dock.widget() is view.library and view.actionLibraryPanel.isEnabled()
+    # fermeture de la fenêtre principale (closing -> attach_all) : tout est réintégré
+    view.detach_library()
+    view.attach_all()
+    assert not view.preview_detached and not view.library_detached
+    assert view.center.indexOf(preview) == 1 and view.library_dock.widget() is view.library
