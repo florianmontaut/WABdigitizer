@@ -838,10 +838,13 @@ class MainController(QtCore.QObject):
             tree.expandAll()
             tree.verticalScrollBar().setValue(scroll)
             tree.setUpdatesEnabled(True)
+        # sélection remise seulement si l'élément courant n'est pas le bon (changement venu
+        # du programme : ajout, suppression, ouverture). Sur un Ctrl+clic, Qt change
+        # l'élément courant puis inverse sa sélection : la forcer ici la défaisait.
         selection = tree.selectionModel()
         if current is None:
             selection.clearSelection()
-        elif selection.currentIndex() != current.index() or not selection.isSelected(current.index()):
+        elif selection.currentIndex() != current.index():
             selection.setCurrentIndex(current.index(),
                                       QtCore.QItemSelectionModel.SelectionFlag.ClearAndSelect)
         self._loading = False

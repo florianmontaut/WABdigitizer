@@ -184,7 +184,9 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   nouvelle courbe (macro de la pile : points, masque effacé, insertion). `merge_curves` :
   courbes sélectionnées d'un même graphique (arborescence en sélection multiple) -> la
   première, morceaux reliés par `extraction.chain`, masques réunis (macro).
-  `rebuild_tree` : met à jour sur place quand la structure est la même (pas de saut).
+  `rebuild_tree` : met à jour sur place quand la structure est la même (pas de saut) ;
+  ne remet la sélection que si l'élément courant n'est pas le bon (sinon Ctrl+clic, où
+  Qt change l'élément courant avant d'inverser sa sélection, serait défait).
   `follow_curve` (mode `Mode.FOLLOW`, touche F) : remplace les points de la courbe choisie,
   ou les complète bout à bout (Maj, `extraction.chain`) ; couleur de la courbe retenue.
 - `controller/commands.py` : annuler / refaire (`QUndoStack` du contrôleur, mécanisme de

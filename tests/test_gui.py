@@ -1003,3 +1003,36 @@ def test_suivre_la_courbe_au_clic(ctrl):
     ctrl.undo_stack.undo()
     ctrl.undo_stack.undo()
     assert len(ctrl.dataset) == 0
+
+
+def test_selection_multiple_ctrl_et_maj(ctrl):
+    """Vrais clics : Ctrl+clic ajoute un élément non contigu, Maj+clic étend la plage."""
+    from PyQt6.QtTest import QTest
+    calibrated(ctrl)
+    for _ in range(4):
+        ctrl.add_dataset()
+    tree = ctrl.view.tree
+    tree.resize(250, 400)
+    tree.show()
+    QtWidgets.QApplication.processEvents()
+    root = ctrl.tree_model.item(0)
+
+    def click(d, modifier=QtCore.Qt.KeyboardModifier.NoModifier):
+        rect = tree.visualRect(root.child(d).index())
+        QTest.mouseClick(tree.viewport(), QtCore.Qt.MouseButton.LeftButton, modifier,
+                         rect.center())
+        QtWidgets.QApplication.processEvents()
+    click(0)
+    assert ctrl.selected_curves() == [(0, 0)] and ctrl.dataset_index == 0
+    click(2, QtCore.Qt.KeyboardModifier.ControlModifier)
+    assert ctrl.selected_curves() == [(0, 0), (0, 2)] and ctrl.dataset_index == 2
+    assert ctrl.view.actionMerge.isEnabled()
+    click(4, QtCore.Qt.KeyboardModifier.ShiftModifier)    # plage depuis le dernier clic
+    assert {(0, 2), (0, 3), (0, 4)} <= set(ctrl.selected_curves())
+    click(2, QtCore.Qt.KeyboardModifier.ControlModifier)   # Ctrl+clic : retire l'élément
+    assert (0, 2) not in ctrl.selected_curves()
+    click(1)                                               # clic simple : lui seul
+    assert ctrl.selected_curves() == [(0, 1)] and ctrl.dataset_index == 1
+    ctrl.add_dataset()                                     # ajout : la nouvelle seule
+    assert ctrl.selected_curves() == [(0, 5)]
+    tree.hide()
