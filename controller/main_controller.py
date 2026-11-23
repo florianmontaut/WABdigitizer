@@ -787,33 +787,65 @@ class MainController(QtCore.QObject):
 
     # ============================================================ arborescence
     def rebuild_tree(self):
+        """
+        Arborescence graphiques / courbes. Même structure (mêmes nombres de graphiques et de
+        courbes) : éléments mis à jour sur place, sans vider le modèle (sinon l'arbre
+        disparaît, l'ascenseur revient en haut et la sélection le fait sauter). Structure
+        changée : reconstruite, ascenseur gardé, sans affichage intermédiaire.
+        """
         self._loading = True
-        self.tree_model.clear()
-        root = self.tree_model.invisibleRootItem()
+        tree, model = self.view.tree, self.tree_model
+        graphs = self.component.graphs
+        same = model.rowCount() == len(graphs) and all(
+            model.item(g).rowCount() == len(graph.datasets) for g, graph in enumerate(graphs))
+        if not same:
+            scroll = tree.verticalScrollBar().value()
+            tree.setUpdatesEnabled(False)
+            model.clear()
+            for g, graph in enumerate(graphs):
+                item = QtGui.QStandardItem(theme.icon("image"), "")
+                item.setData((g, None), ROLE)
+                model.invisibleRootItem().appendRow(item)
+                for d in range(len(graph.datasets)):
+                    child = QtGui.QStandardItem()
+                    child.setData((g, d), ROLE)
+                    child.setCheckable(True)
+                    item.appendRow(child)
         current = None
-        for g, graph in enumerate(self.component.graphs):
-            mark = "" if graph.calibrated else "  (non calibré)"
-            item = QtGui.QStandardItem(theme.icon("image"), graph.name + mark)
-            item.setData((g, None), ROLE)
-            root.appendRow(item)
+        for g, graph in enumerate(graphs):
+            item = model.item(g)
+            self._set_text(item, graph.name + ("" if graph.calibrated else "  (non calibré)"))
             if g == self.graph_index and self.dataset_index is None:
                 current = item
             for d, dataset in enumerate(graph.datasets):
+                child = item.child(d)
                 label = dataset.name + (f"  [{dataset.condition}]" if dataset.condition else "")
-                child = QtGui.QStandardItem(label + f"  ({len(dataset)})")
-                child.setData((g, d), ROLE)
-                child.setCheckable(True)
-                child.setCheckState(QtCore.Qt.CheckState.Checked if dataset.visible
-                                    else QtCore.Qt.CheckState.Unchecked)
-                child.setData(QtGui.QColor(dataset.color), QtCore.Qt.ItemDataRole.DecorationRole)
-                item.appendRow(child)
+                self._set_text(child, label + f"  ({len(dataset)})")
+                state = (QtCore.Qt.CheckState.Checked if dataset.visible
+                         else QtCore.Qt.CheckState.Unchecked)
+                if child.checkState() != state:
+                    child.setCheckState(state)
+                color = QtGui.QColor(dataset.color)
+                if child.data(QtCore.Qt.ItemDataRole.DecorationRole) != color:
+                    child.setData(color, QtCore.Qt.ItemDataRole.DecorationRole)
                 if g == self.graph_index and d == self.dataset_index:
                     current = child
-        self.view.tree.expandAll()
-        if current is not None:
-            self.view.tree.selectionModel().setCurrentIndex(
-                current.index(), QtCore.QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        if not same:
+            tree.expandAll()
+            tree.verticalScrollBar().setValue(scroll)
+            tree.setUpdatesEnabled(True)
+        selection = tree.selectionModel()
+        if current is None:
+            selection.clearSelection()
+        elif selection.currentIndex() != current.index() or not selection.isSelected(current.index()):
+            selection.setCurrentIndex(current.index(),
+                                      QtCore.QItemSelectionModel.SelectionFlag.ClearAndSelect)
         self._loading = False
+
+    @staticmethod
+    def _set_text(item, text):
+        if item.text() != text:
+            item.setText(text)
 
     def tree_current_changed(self, current, _previous):
         if self._loading or not current.isValid():

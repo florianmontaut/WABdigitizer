@@ -181,6 +181,39 @@ def test_courbes_arborescence_et_proprietes(ctrl):
     assert len(graph.datasets) == 1
 
 
+def test_selection_dans_l_arborescence_sans_saut(ctrl):
+    """Choisir une courbe ne reconstruit pas l'arbre : ascenseur et éléments gardés."""
+    graph = calibrated(ctrl)
+    for _ in range(25):
+        ctrl.add_dataset()
+    tree = ctrl.view.tree
+    tree.resize(250, 150)
+    tree.show()
+    QtWidgets.QApplication.processEvents()
+    bar = tree.verticalScrollBar()
+    assert bar.maximum() > 0
+    bar.setValue(bar.maximum() // 2)
+    root = ctrl.tree_model.item(0)
+    before = [root.child(d) for d in range(root.rowCount())]
+    target = tree.indexAt(QtCore.QPoint(20, 75))         # courbe visible au milieu
+    from controller.main_controller import ROLE
+    g, d = target.data(ROLE)
+    assert d is not None and d != ctrl.dataset_index
+    value = bar.value()
+    tree.selectionModel().setCurrentIndex(
+        target, QtCore.QItemSelectionModel.SelectionFlag.ClearAndSelect)
+    QtWidgets.QApplication.processEvents()
+    assert (ctrl.graph_index, ctrl.dataset_index) == (g, d)
+    assert bar.value() == value                          # pas de saut
+    assert ctrl.tree_model.item(0) is root and [root.child(i) for i in range(
+        root.rowCount())] == before                      # éléments mis à jour sur place
+    ctrl.view.params["dataset"]["Nom"] = "renommée"      # texte changé sur place
+    assert "renommée" in root.child(d).text() and bar.value() == value
+    ctrl.add_dataset()                                   # structure changée : reconstruite
+    assert ctrl.tree_model.item(0).rowCount() == len(graph.datasets)
+    tree.hide()
+
+
 def test_projet_enregistre_et_relu(ctrl, tmp_path):
     graph = calibrated(ctrl)
     ctrl.canvas_pressed(300, 250)
