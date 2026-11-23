@@ -86,8 +86,9 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     Graphique en image (J4) : grandes images hors des cadres vectoriels (`_image_frames`)
     -> `FoundGraph(raster=True, x=y=None)`, légendes rattachées comme les autres ;
     `_build` les écarte si `plotimage.find_plot` ne trouve rien, sinon
-    `_interpret_raster` (légende, axes par `datasheet.function_axes`, sans calibration ni
-    courbe, `DraftGraph.plot` ; calibré sur les valeurs lues s'il y en a).
+    `_interpret_raster` (légende, axes par `datasheet.function_axes`, `DraftGraph.plot`,
+    calibré sur les valeurs lues s'il y en a, courbes relevées par `curvetrace.trace`,
+    posées après la calibration pour garder l'ordre des polylignes).
     `Draft.calibrate(i, x1, x2, y1, y2, log)` : valeurs saisies -> calibration
     orthonormée sur `PlotArea.markers()`. Légendes : `_match_captions` choisit les paires
     de la moins chère à la plus chère (écart vertical + largeur non recouverte) ;
@@ -102,6 +103,17 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     `parameter` / `curve_condition`, `expand_range` (plage ou liste) / `assign_range`
     (ordre du courant moyen), `classify` (`KINDS`), `energy_kind`, `diode_graph`,
     `plecs_role`. `dimension` contourne « pF » (préfixe pico inconnu de formules).
+  - `curvetrace.py` : relevé automatique des courbes d'un graphique en image (numpy,
+    scipy ; pas d'apprentissage). Encre plus foncée que la grille (`ink_threshold`) ;
+    texte retiré (`remove_text` : caractères alignés, dont un de pleine hauteur, sinon
+    des tirets) ; épaisseur (`stroke_width` : plus court passage vertical / horizontal
+    par pixel) ; traits fins retirés par ouverture (disque, pas carré) ; suivi colonne par
+    colonne (`_track` : prédiction par la pente, `linear_sum_assignment`, coût = distance
+    au point `_point` pris dans la tache, tache partagée aux croisements, trous des tirets
+    franchis), depuis le côté le plus encombré ; parties raides ligne par ligne sur
+    l'encre restante, raccordées (`_join`) ; tri : traits de rappel (plus clairs, ou
+    droits contre un texte et plus fins), grille, échantillons de légende
+    (`LegendEntry`, gardés pour nommer) ; style par la part posée sur l'encre.
   - `plotimage.py` : graphique en image : `find_plot` -> `PlotArea` (cadre = traits de
     grille de même étendue, graduations = premières bandes d'encre sous le cadre et à sa
     gauche, découpées en étiquettes, prolongées à gauche sans le titre tourné ;
@@ -146,7 +158,10 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   `main_window.py`, `properties.py` (groupes du ParameterTree), `dialogs.py`.
 - `controller/main_controller.py` : modes du canevas, calibration, édition, extraction,
   modèle, fichiers, exports. `split_points` : points de la courbe dans son masque ->
-  nouvelle courbe (macro de la pile : points, masque effacé, insertion).
+  nouvelle courbe (macro de la pile : points, masque effacé, insertion). `merge_curves` :
+  courbes sélectionnées d'un même graphique (arborescence en sélection multiple) -> la
+  première, morceaux reliés par `extraction.chain`, masques réunis (macro).
+  `rebuild_tree` : met à jour sur place quand la structure est la même (pas de saut).
 - `controller/commands.py` : annuler / refaire (`QUndoStack` du contrôleur, mécanisme de
   GLviewer, sans son code). Commandes par instantanés avant / après, objets désignés par
   référence : `PointsCommand` (points + modèle ; flèches fusionnées par `mergeWith`),
@@ -156,6 +171,7 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   `set_dirty()` ; l'étoile du titre = hors pile ou pile non propre.
 - `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_compare.py`, `test_zoom.py`,
   `test_library.py`, `test_pdfimport.py`, `test_datasheet.py`, `test_plotimage.py`,
+  `test_curvetrace.py`,
   `test_gui.py`
   (contrôleurs sans écran).
 
@@ -195,8 +211,11 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   « MOSFET with Diode », modèle de Cauer, ajustement de Foster sur une courbe Zth(t).
 
 - Import PDF (J0 à J4 faits) : graphiques en image : graduations en exposant (10^n) non
-  lues, courbes non relevées (noires, pointillés, croisées), unités des axes devinées
-  seulement pour V, A, °C, W. Faible sur
+  lues ; courbes nommées par rang et style (pas encore par la légende ni les étiquettes
+  « 19V ») ; courbes qui se touchent longtemps (réseau de sortie près de l'origine) ou
+  presque superposées (temps de commutation) mal séparées ; outil « suivre la courbe au
+  clic » à faire ; relevé ~0,2 s par graphique (à paralléliser si besoin) ; unités des
+  axes devinées seulement pour V, A, °C, W. Faible sur
   les datasheets anciennes tout en noir (FF300R12KT4 : pointillés tiret par tiret,
   légendes sans numéro, Ω de la police Symbol lu « W ») ; caractères sans Unicode
   (« ¤ ») ; conduction sur un réseau de courbes selon VGS (choisir la tension de grille) ;

@@ -119,6 +119,7 @@ class MainController(QtCore.QObject):
         view.actionFit.triggered.connect(self.fit_model)
         view.actionAddCurve.triggered.connect(self.add_dataset)
         view.actionSplit.triggered.connect(self.split_points)
+        view.actionMerge.triggered.connect(self.merge_curves)
         view.actionDelete.triggered.connect(self.delete_selection)
         view.actionOptions.triggered.connect(self.edit_options)
         view.actionDark.toggled.connect(self.set_dark_mode)
@@ -135,6 +136,7 @@ class MainController(QtCore.QObject):
         view.canvas.key_command.connect(self.key_command)
         view.table.currentCellChanged.connect(self.table_current_changed)
         view.tree.selectionModel().currentChanged.connect(self.tree_current_changed)
+        view.tree.selectionModel().selectionChanged.connect(self._update_merge)
         self.tree_model.itemChanged.connect(self.tree_item_changed)
         view.table.cellChanged.connect(self.table_cell_changed)
         for name, param in view.params.items():
@@ -191,6 +193,7 @@ class MainController(QtCore.QObject):
                        view.actionAddCurve, view.actionSplit, view.actionDelete,
                        view.actionExportPlecs):
             action.setEnabled(editable)
+        self._update_merge()
         view.parameters.setEnabled(editable)
         view.table.setEditTriggers(
             QtWidgets.QAbstractItemView.EditTrigger.DoubleClicked
@@ -1299,6 +1302,65 @@ class MainController(QtCore.QObject):
         dataset.mask[...] = False
         self.push(MaskCommand(self, self.graph, dataset, before, dataset.mask,
                               "Effacer le masque"))
+
+    def selected_curves(self) -> list:
+        """Courbes sélectionnées dans l'arborescence : [(graphique, courbe)] triées."""
+        found = set()
+        for index in self.view.tree.selectionModel().selectedIndexes():
+            g, d = index.data(ROLE)
+            if d is not None:
+                found.add((g, d))
+        return sorted(found)
+
+    def _update_merge(self, *_):
+        chosen = self.selected_curves()
+        self.view.actionMerge.setEnabled(
+            not self.read_only and len(chosen) >= 2 and len({g for g, _ in chosen}) == 1)
+
+    def merge_curves(self, *_) -> bool:
+        """
+        Courbes sélectionnées d'un même graphique -> la première (nom, couleur, réglages
+        gardés) : morceaux reliés bout à bout en une polyligne (`extraction.chain`),
+        masques réunis, autres courbes supprimées. Une seule étape d'annulation.
+        """
+        if not self._editable():
+            return False
+        chosen = self.selected_curves()
+        if len(chosen) < 2 or len({g for g, _ in chosen}) != 1:
+            self.view.message("Sélectionnez au moins deux courbes d'un même graphique "
+                              "(Ctrl+clic dans l'arborescence)", 6000)
+            return False
+        g = chosen[0][0]
+        graph = self.component.graphs[g]
+        datasets = [graph.datasets[d] for _, d in chosen]
+        target, others = datasets[0], datasets[1:]
+        if self.graph_index != g:
+            self.select(g, chosen[0][1])
+        self.dataset_index = chosen[0][1]
+        pixels = extraction.chain([d.pixels for d in datasets])
+        text = f"Fusionner {len(datasets)} courbes dans « {target.name} »"
+        self.undo_stack.beginMacro(text)
+        try:
+            def merge(d):
+                d.pixels = pixels
+                d.fit = None
+            self.change_points(text, merge)
+            masks = [d.mask for d in others if d.mask is not None and d.mask.any()]
+            if masks:
+                mask = graph.mask_of(target)
+                before = mask.copy()
+                for m in masks:
+                    if m.shape == mask.shape:
+                        mask |= m
+                self.push(MaskCommand(self, graph, target, before, mask, "Réunir les masques"))
+            for dataset in others:
+                self.push(InsertCommand(self, graph.datasets, graph.datasets.index(dataset),
+                                        dataset, False, text, graph=graph))
+        finally:
+            self.undo_stack.endMacro()
+        self.select(g, graph.datasets.index(target))
+        self.view.message(f"{text} : {len(pixels)} points", 6000)
+        return True
 
     def split_points(self, *_) -> bool:
         """

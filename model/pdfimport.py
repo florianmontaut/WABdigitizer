@@ -22,7 +22,7 @@ Graphique incorporé en image (Excel collé...) : repéré par une grande image 
 cadre, grille et graduations trouvés dans l'image (`plotimage` : valeurs lues par
 comparaison aux chiffres des polices du système, suite régulière exigée) ; calibré sur
 les valeurs lues, que l'utilisateur vérifie ou remplace (`Draft.calibrate`) ; courbes
-relevées dans l'application.
+relevées automatiquement (`curvetrace` : suivi colonne par colonne), à vérifier.
 
 Ce qui n'est pas lu est signalé (avertissements) : l'import propose, l'utilisateur vérifie.
 Dépendances facultatives : pdfminer.six (MIT), pypdfium2 (Apache / BSD).
@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import datasheet, plotimage
+from . import curvetrace, datasheet, plotimage
 from .calibration import AxisCalibration, CalibrationError, to_four_points
 from .document import PALETTE, Axis, Component, Dataset, Graph
 
@@ -1059,7 +1059,7 @@ def analyse_page(page, page_no) -> list:
     for k, f in enumerate(frames):
         if f.get("raster"):
             g, used = FoundGraph(page_no, f["frame"], None, None, raster=True), set()
-            g.warnings.append("graphique en image : courbes à relever dans l'application")
+            g.warnings.append("graphique en image")
         else:
             g, used = _analyse_frame(f, own_c[k], own_s[k], page_no)
         if g is None:
@@ -1396,8 +1396,8 @@ SYMBOL_UNITS = {"V": "V", "I": "A", "T": "°C", "P": "W"}
 def _interpret_raster(g, image, area, source) -> DraftGraph:
     """
     Graphique en image : nom, conditions et type d'après la légende de la figure ; axes
-    d'après « Y = f(X) » ; pas de calibration (valeurs saisies par l'utilisateur) ni de
-    courbe (relevées dans l'application).
+    d'après « Y = f(X) » ; calibration sur les graduations lues ; courbes relevées
+    automatiquement (`curvetrace`), nommées par leur rang et leur style.
     """
     caption, _, _ = _texts(g, ())
     title = datasheet.plain(caption[0]) if caption else f"Page {g.page}"
@@ -1426,13 +1426,24 @@ def _interpret_raster(g, image, area, source) -> DraftGraph:
     graph = Graph(name=title, image=image, source=source)
     graph.x_axis = Axis(datasheet.plain(xq), xu)
     graph.y_axis = Axis(datasheet.plain(yq), yu)
-    dataset = Dataset(name="Courbe 1", condition=", ".join(conditions))
-    m = TEMPERATURE.search(dataset.condition)
-    if m:
-        dataset.temperature = float(m.group(1).replace("−", "-").replace(",", "."))
-    dataset.color = PALETTE[0]
-    graph.datasets = [dataset]
+    traced = curvetrace.trace(image, area).curves
+    m = TEMPERATURE.search(", ".join(conditions))
+    datasets = []
+    for k, curve in enumerate(traced or [None]):
+        name = f"Courbe {k + 1}" + (f" ({curve.style})" if curve is not None else "")
+        dataset = Dataset(name=name, condition=", ".join(conditions),
+                          pixels=curve.points.copy() if curve is not None else np.empty((0, 2)))
+        if m:
+            dataset.temperature = float(m.group(1).replace("−", "-").replace(",", "."))
+        dataset.color = PALETTE[k % len(PALETTE)]
+        datasets.append(dataset)
+    if traced:
+        warnings.append(f"{len(traced)} courbe(s) relevée(s) automatiquement dans l'image "
+                        "(noms, croisements, courbes proches) : à vérifier")
+    else:
+        warnings.append("aucune courbe relevée : à relever dans l'application")
     graph.set_calibration(calibration)
+    graph.datasets = datasets          # après la calibration : ordre de la polyligne gardé
     diode = datasheet.diode_graph(" ".join(caption), xq, yq)
     return DraftGraph(graph, g, kind, "", diode, "", conditions, warnings, plot=area)
 

@@ -115,6 +115,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actionSplit = a("Séparer les points du masque", "split",
                              "Points de la courbe peints au pinceau -> nouvelle courbe "
                              "(deux courbes relevées comme une seule)", "Ctrl+Shift+X")
+        self.actionMerge = a("Fusionner les courbes", "merge",
+                             "Courbes sélectionnées d'un même graphique (Ctrl+clic dans "
+                             "l'arborescence) -> une seule courbe, morceaux reliés bout à bout",
+                             "Ctrl+Shift+J")
         self.actionDelete = a("Supprimer la sélection", "trash",
                               "Supprimer le graphique ou la courbe sélectionné")
         self.actionOptions = a("Options...", "settings", "Options de l'application")
@@ -177,7 +181,8 @@ class MainWindow(QtWidgets.QMainWindow):
             menu.addAction(act)
         menu.addSeparator()
         for act in (self.actionClearMask, self.actionDetection, self.actionExtract,
-                    self.actionFit, self.actionAddCurve, self.actionSplit, self.actionDelete):
+                    self.actionFit, self.actionAddCurve, self.actionSplit, self.actionMerge,
+                    self.actionDelete):
             menu.addAction(act)
         menu = self.menuBar().addMenu("&Librairie")
         self.actionLibraryPanel = self.library_dock.toggleViewAction()
@@ -206,6 +211,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tree = QtWidgets.QTreeView()
         self.tree.setHeaderHidden(True)
         self.tree.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tree.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tree.addAction(self.actionMerge)
         self.tree.addAction(self.actionDelete)
         self.tree.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.ActionsContextMenu)
         self.actionDelete.setShortcut(QtGui.QKeySequence("Ctrl+Del"))

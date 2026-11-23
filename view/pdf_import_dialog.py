@@ -41,6 +41,12 @@ def axis_text(axis, log) -> str:
     return text + (" log" if log else "")
 
 
+def image_text(graph) -> str:
+    """Colonne « Courbes » d'un graphique en image : courbes relevées, calibré ou non."""
+    count = sum(len(d) > 0 for d in graph.datasets)
+    return f"{count} (image{', calibrée' if graph.calibrated else ''})"
+
+
 class PdfImportDialog(QtWidgets.QDialog):
 
     def __init__(self, draft, parent=None):
@@ -100,8 +106,7 @@ class PdfImportDialog(QtWidgets.QDialog):
                       3: datasheet.KINDS.get(dg.kind, dg.kind) + (" (diode)" if dg.part == "Diode"
                                                                   and len(draft.parts) > 1 else ""),
                       5: axis_text(graph.x_axis, log_x), 6: axis_text(graph.y_axis, log_y),
-                      7: (("image, calibrée" if graph.calibrated else "image") if raster
-                          else str(len(graph.datasets))),
+                      7: (image_text(graph) if raster else str(len(graph.datasets))),
                       8: str(len(dg.warnings)) if dg.warnings else ""}
             for col, value in values.items():
                 cell = QtWidgets.QTableWidgetItem(value)
@@ -285,8 +290,8 @@ class PdfImportDialog(QtWidgets.QDialog):
             origin = "valeurs lues dans l'image, à vérifier" if not typed else "valeurs saisies"
             self.tick_error.setText(
                 f"Calibré ({origin}) : X de {format_value(cal.x1)} à {format_value(cal.x2)}, "
-                f"Y de {format_value(cal.y1)} à {format_value(cal.y2)}. Courbes à relever "
-                "après l'import (pinceau, extraction).")
+                f"Y de {format_value(cal.y1)} à {format_value(cal.y2)}. Courbes relevées "
+                "automatiquement : à vérifier après l'import.")
         else:
             self.tick_error.setText("Valeurs non lues : à saisir, sinon le graphique est "
                                     "importé sans calibration (à calibrer dans l'application).")
@@ -297,7 +302,7 @@ class PdfImportDialog(QtWidgets.QDialog):
             texts, log_x, log_y = self.tick_values.get(row, ({}, dg.plot.log_x, dg.plot.log_y))
             self.table.item(row, 5).setText(axis_text(dg.graph.x_axis, log_x))
             self.table.item(row, 6).setText(axis_text(dg.graph.y_axis, log_y))
-            self.table.item(row, 7).setText("image, calibrée" if dg.graph.calibrated else "image")
+            self.table.item(row, 7).setText(image_text(dg.graph))
 
     def _role_changed(self, *_):
         for combo, dg in zip(self.roles, self.draft.graphs):

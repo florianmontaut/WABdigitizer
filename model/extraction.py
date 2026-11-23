@@ -182,6 +182,32 @@ def on_grid(binary, calibration, settings: ExtractionSettings) -> np.ndarray:
 
 
 # ================================================================ squelette
+def chain(pieces) -> np.ndarray:
+    """
+    Morceaux d'une même courbe (polylignes (n, 2), dans le désordre et dans n'importe quel
+    sens) -> une seule polyligne : on part du bout le plus à gauche, puis on ajoute le
+    morceau dont un bout est le plus proche de la fin (retourné au besoin). Les parties
+    raides ou verticales gardent leur ordre (pas de tri par X).
+    """
+    pieces = [np.asarray(p, dtype=float).reshape(-1, 2) for p in pieces]
+    pieces = [p for p in pieces if len(p)]
+    if not pieces:
+        return np.empty((0, 2))
+    starts = [min((p[0], p), (p[-1], p[::-1]), key=lambda t: (t[0][0], t[0][1]))[1]
+              for p in pieces]
+    first = min(range(len(pieces)), key=lambda i: (starts[i][0, 0], starts[i][0, 1]))
+    out = [starts[first]]
+    left = [p for i, p in enumerate(pieces) if i != first]
+    while left:
+        end = out[-1][-1]
+        best = min([(np.hypot(*(p[0] - end)), i, False) for i, p in enumerate(left)]
+                   + [(np.hypot(*(p[-1] - end)), i, True) for i, p in enumerate(left)])
+        _, i, reverse = best
+        piece = left.pop(i)
+        out.append(piece[::-1] if reverse else piece)
+    return np.vstack(out)
+
+
 def skeleton(binary, tolerance: float = 1.0) -> np.ndarray:
     """Squelette des pixels, un point (médiane) par colonne, puis Douglas-Peucker."""
     try:

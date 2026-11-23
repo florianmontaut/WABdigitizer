@@ -34,6 +34,9 @@ python -m pytest tests
    - deux courbes relevées comme une seule (allers-retours en dents de scie) : peindre au
      pinceau les points de l'une, puis **Séparer les points du masque** (`Ctrl+Shift+X`) :
      ils forment une nouvelle courbe (une seule étape d'annulation).
+   - une courbe relevée en plusieurs morceaux : les sélectionner dans l'arborescence
+     (`Ctrl+clic`), puis **Fusionner les courbes** (menu contextuel, `Ctrl+Shift+J`) :
+     morceaux reliés bout à bout en une seule courbe (une seule étape d'annulation).
 4. **Condition** de la courbe (« Tj = 125 °C ») et unités des axes dans le panneau de droite.
 5. **Modèle** (`Ctrl+M`) : formule de x (`a*x^b`, `v0 + r*x + k*x^b`...) ajustée sur les
    points ; courbe du modèle en pointillés sur l'image pour vérification.
@@ -115,8 +118,13 @@ chiffres comparés à ceux des polices du système) et doivent former une suite 
 les autres. Le graphique arrive **calibré** sur la première et la dernière graduation de
 chaque axe, encadrées dans la fenêtre avec leur extrait : un champ vide garde la valeur
 lue (en gris), une saisie la remplace. Lecture incohérente : valeurs à saisir (sinon
-import sans calibration). Les courbes sont à relever dans l'application (pinceau,
-extraction) ; pas de rôle PLECS proposé.
+import sans calibration). Les **courbes sont relevées automatiquement** (sans GPU, environ
+0,2 s par graphique) : suivi colonne par colonne, croisements, tirets et pointillés
+reliés en une seule polyligne, parties raides (flanc d'une SOA) ; texte, traits de rappel
+des étiquettes, échantillons de légende et grille écartés. Nommées « Courbe 1 (plein) »,
+« Courbe 2 (tirets) »... de haut en bas, à vérifier : courbes qui se touchent sur une
+longue distance ou presque superposées (fusionner, séparer, reprendre au pinceau). Pas
+de rôle PLECS proposé.
 
 Limites : PDF scanné (rien n'est lu) ; courbes de même style
 sans étiquette (à nommer) ; étiquettes absentes à la source (ST : seulement les courbes

@@ -881,7 +881,7 @@ def test_dialogue_d_import_graphique_en_image(tmp_path):
     assert not dialog.tick_images["y2"].pixmap().isNull()
     graph = draft.graphs[0].graph
     # valeurs lues : calibré d'emblée, champs vides avec la valeur lue en texte gris
-    assert graph.calibrated and dialog.table.item(0, 7).text() == "image, calibrée"
+    assert graph.calibrated and dialog.table.item(0, 7).text() == "2 (image, calibrée)"
     assert dialog.tick_edits["y2"].text() == ""
     assert dialog.tick_edits["y2"].placeholderText() == "lu : 60"
     assert "lues dans l'image" in dialog.tick_error.text()
@@ -933,3 +933,51 @@ def test_separer_les_points_du_masque(ctrl):
     ctrl.select(0, 1)
     graph.mask_of(ctrl.dataset)[:, :] = True
     assert not ctrl.split_points() and len(graph.datasets) == 2
+
+
+def select_curves(ctrl, pairs):
+    """Sélection multiple dans l'arborescence (comme Ctrl+clic)."""
+    from PyQt6.QtCore import QItemSelection, QItemSelectionModel
+    selection = ctrl.view.tree.selectionModel()
+    selection.clearSelection()
+    for g, d in pairs:
+        index = ctrl.tree_model.item(g).child(d).index()
+        selection.select(index, QItemSelectionModel.SelectionFlag.Select)
+
+
+def test_fusionner_des_courbes(ctrl):
+    graph = calibrated(ctrl)
+    pieces = [np.array([(300, 250), (350, 240), (400, 230)], float),   # milieu
+              np.array([(250, 270), (200, 280), (150, 290)], float),   # gauche, à l'envers
+              np.array([(410, 228), (410, 150), (412, 120)], float)]   # bout vertical
+    graph.datasets[0].pixels = pieces[0].copy()
+    for piece in pieces[1:]:
+        ctrl.add_dataset()
+        ctrl.dataset.pixels = piece.copy()
+    graph.mask_of(graph.datasets[2])[10:20, 10:20] = True
+    first = graph.datasets[0]
+    ctrl.rebuild_tree()
+    select_curves(ctrl, [(0, 0)])
+    assert not ctrl.view.actionMerge.isEnabled()          # une seule courbe
+    select_curves(ctrl, [(0, 0), (0, 1), (0, 2)])
+    assert ctrl.view.actionMerge.isEnabled()
+    count = ctrl.undo_stack.count()
+    assert ctrl.merge_curves()
+    assert ctrl.undo_stack.count() == count + 1          # une seule étape
+    assert graph.datasets == [first] and ctrl.dataset is first
+    expected = np.vstack([pieces[1][::-1], pieces[0], pieces[2]])   # bout à bout
+    assert np.allclose(first.pixels, expected)
+    assert first.mask is not None and first.mask[15, 15]  # masques réunis
+    ctrl.undo_stack.undo()
+    assert len(graph.datasets) == 3 and np.allclose(first.pixels, pieces[0])
+    ctrl.undo_stack.redo()
+    assert len(graph.datasets) == 1 and len(first) == 9
+    select_curves(ctrl, [(0, 0)])
+    assert not ctrl.merge_curves()                       # message, rien ne change
+
+
+def test_chainage_des_morceaux():
+    from model.extraction import chain
+    assert chain([]).shape == (0, 2)
+    out = chain([[(5, 0), (6, 0)], [(2, 0), (0, 0)], [(3, 1), (4, 1)]])
+    assert np.allclose(out[:, 0], [0, 2, 3, 4, 5, 6])

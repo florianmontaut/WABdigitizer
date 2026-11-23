@@ -216,6 +216,14 @@ def test_graphique_en_image(tmp_path):
     ys = calibration.pixel_to_data([(dg.plot.frame[0], y) for y in dg.plot.y_grid])[:, 1]
     assert np.allclose(xs, np.round(xs), atol=0.03)      # traits de grille : 0, 1, ... 6
     assert np.allclose(ys, np.round(ys / 10) * 10, atol=0.3)
+    # courbes relevées dans l'image : droite pleine 8x + 5, droite en tirets 4x + 5
+    assert [d.name for d in graph.datasets] == ["Courbe 1 (plein)", "Courbe 2 (tirets)"]
+    assert all(d.temperature == 25 for d in graph.datasets)
+    for dataset, slope in zip(graph.datasets, (8, 4)):
+        x, y = calibration.pixel_to_data(dataset.pixels).T
+        apart = x > 0.5                                  # départ commun : traits confondus
+        assert np.ptp(x) > 5 and np.abs(y - (slope * x + 5))[apart].max() < 0.6
+    assert any("relevée(s) automatiquement" in w for w in dg.warnings)
     component, warnings = draft.component()
     assert component.graphs == [graph] and any("graphique en image" in w for w in warnings)
     calibration = draft.calibrate(0, 1, 5, 10, 50)          # valeurs corrigées à la main
