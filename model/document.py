@@ -27,6 +27,7 @@ import numpy as np
 
 from .calibration import AxisCalibration
 from .extraction import ExtractionSettings
+from . import signals
 from .fit import FitResult
 from .plecs import PlecsSettings
 
@@ -251,6 +252,7 @@ class Component:
     notes: str = ""
     graphs: list = field(default_factory=list)
     plecs: PlecsSettings = field(default_factory=PlecsSettings)
+    computed: list = field(default_factory=list)   # voies calculées (signals.ComputedCurve)
 
     def add_graph(self, image: np.ndarray, name: str | None = None, source: str = "") -> Graph:
         graph = Graph(name=name or f"Graphique {len(self.graphs) + 1}", image=image,
@@ -264,7 +266,8 @@ class Component:
                 "manufacturer": self.manufacturer, "part_number": self.part_number,
                 "category": self.category, "notes": self.notes,
                 "plecs": self.plecs.to_dict(),
-                "graphs": [g.to_dict() for g in self.graphs]}
+                "graphs": [g.to_dict() for g in self.graphs],
+                "computed": [c.to_dict() for c in self.computed]}
 
     @classmethod
     def from_dict(cls, data: dict) -> "Component":
@@ -274,7 +277,9 @@ class Component:
                    part_number=data.get("part_number", ""), category=data.get("category", ""),
                    notes=data.get("notes", ""),
                    graphs=[Graph.from_dict(g) for g in data.get("graphs", [])],
-                   plecs=PlecsSettings.from_dict(data.get("plecs")))
+                   plecs=PlecsSettings.from_dict(data.get("plecs")),
+                   computed=[signals.ComputedCurve.from_dict(c)
+                             for c in data.get("computed", [])])
 
 
 def save(component: Component, path) -> None:

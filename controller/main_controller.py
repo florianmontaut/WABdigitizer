@@ -27,10 +27,12 @@ from model.plecs import PlecsError
 from controller.commands import (CalibrationCommand, InsertCommand, MaskCommand,
                                  PointsCommand, points_state, same_points)
 from controller.compare_controller import CompareController
+from controller.signals_controller import SignalsController
 from controller.library_controller import LibraryController
 from view import zoom
 from view.canvas import Mode
 from view.compare_window import CompareWindow
+from view.signals_window import SignalsWindow
 from view.dialogs import CalibrationDialog, format_value, parse_value
 from view.main_window import IMAGE_SUFFIXES, qimage_to_array
 from view.pdf_import_dialog import PdfImportDialog
@@ -71,6 +73,7 @@ class MainController(QtCore.QObject):
         self._loading = False            # remplissage des paramètres en cours
         self._outside_dirty = False      # modifications hors de la pile (propriétés)
         self.compare = None              # contrôleur de la fenêtre de comparaison
+        self.signals = None              # contrôleur de la fenêtre des calculs entre signaux
         self.read_only = False           # fiche sans projet : consultation seulement
 
         # annuler / refaire : pile parentée à la vue, actions dans la barre et le menu
@@ -78,6 +81,7 @@ class MainController(QtCore.QObject):
         self.undo_stack.setUndoLimit(UNDO_LIMIT)
         self.undo_stack.cleanChanged.connect(self._update_title)
         self.undo_stack.indexChanged.connect(self._update_title)
+        self.undo_stack.indexChanged.connect(self._stack_changed)
         view.add_history_actions(self.undo_stack.createUndoAction(view, "Annuler"),
                                  self.undo_stack.createRedoAction(view, "Refaire"))
 
@@ -104,6 +108,7 @@ class MainController(QtCore.QObject):
         view.actionExportComponent.triggered.connect(self.export_component)
         view.actionExportPlecs.triggered.connect(self.export_plecs)
         view.actionCompare.triggered.connect(self.open_compare)
+        view.actionSignals.triggered.connect(self.open_signals)
         view.actionPublish.triggered.connect(self.publish)
         view.actionLibraryOpen.triggered.connect(self.library_open)
         view.actionLibraryCompare.triggered.connect(self.library_compare)
@@ -212,6 +217,7 @@ class MainController(QtCore.QObject):
         """
         self.undo_stack.cleanChanged.disconnect(self._update_title)
         self.undo_stack.indexChanged.disconnect(self._update_title)
+        self.undo_stack.indexChanged.disconnect(self._stack_changed)
 
     def push(self, command):
         """Commande dans la pile (son redo() est appliqué) ; ignorée si elle ne change rien."""
@@ -299,6 +305,9 @@ class MainController(QtCore.QObject):
         self.view.refresh_theme()
         if self.compare is not None:
             self.compare.view.refresh_theme()
+        if self.signals is not None:
+            self.signals.view.refresh_theme()
+            self.signals.refresh_plots()
 
     # ============================================================ comparaison
     def current_sheet(self):
@@ -325,6 +334,29 @@ class MainController(QtCore.QObject):
         self.compare.view.show()
         self.compare.view.raise_()
         self.compare.view.activateWindow()
+
+    # ============================================================ calculs entre signaux
+    def open_signals(self, *_):
+        """
+        Fenêtre non modale, créée une fois (comme la comparaison) : voies calculées du
+        composant ouvert, lu par référence faible vers ce contrôleur.
+        """
+        if self.signals is None:
+            window = SignalsWindow(self.view)
+            self.signals = SignalsController(window, self.options, weakref.ref(self))
+        else:
+            self.signals.reload()
+        self.signals.view.show()
+        self.signals.view.raise_()
+        self.signals.view.activateWindow()
+
+    def _stack_changed(self, *_):
+        self._refresh_signals()
+
+    def _refresh_signals(self):
+        """Fenêtre des calculs ouverte : relue quand les courbes du composant changent."""
+        if self.signals is not None and self.signals.view.isVisible():
+            self.signals.reload()
 
     # ============================================================ librairie
     def _library_folder(self) -> pathlib.Path:
@@ -1779,6 +1811,7 @@ class MainController(QtCore.QObject):
         self.fill_properties()
         self.refresh_dataset_views()
         self.refresh_detection()
+        self._refresh_signals()
 
     def refresh_dataset_views(self):
         self.refresh_curves()

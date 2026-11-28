@@ -174,6 +174,35 @@ valeur dans l'unité de la voie) ; mesures de l'écran et points à vérifier da
 Courbes superposées (même niveau, même allure) : à reprendre à la main (pinceau, Suivre la
 courbe, Séparer). Voies REF / MATH : pas encore.
 
+## Calculs entre signaux
+
+Outils › **Calculs entre signaux...** (`Ctrl+Shift+M`), fenêtre à côté de la
+numérisation : formules sur les courbes du composant ouvert (graphiques calibrés, abscisse
+= temps), comme les voies MATH d'un oscilloscope ou les voies calculées du GLviewer.
+
+| Formule | Résultat |
+|---|---|
+| `[CH1]*[CH4]` | puissance instantanée (unité déduite : W) |
+| `integ([P])` | énergie cumulée (J) ; `[P]` : voie calculée plus haut |
+| `integ([CH1]*[CH4]; 0; 2e-6)` | énergie entre deux instants (nombre, J) |
+| `deriv([CH1])`, `movavg([CH1]; 15)` | dérivée (V/s), moyenne glissante sur 15 points |
+| `mean`, `rms`, `pkpk` (`x` ou `x; t1; t2`) | moyenne, valeur efficace, crête-crête (nombres) |
+
+Signaux entre crochets : `[Vce]` (graphique d'une seule courbe, ou courbe de nom unique),
+`[Graphique:Courbe]` ; `t` (ou `time`) : le temps en s ; fonctions de formules (`sin`,
+`exp`, `sqrt`, `abs`, `interp`...). Nombres en unités SI (`2e-6`, pas `2 µs`).
+
+- **Signaux non synchrones** : les signaux utilisés sont interpolés sur la base de temps
+  du plus fin d'entre eux, sur leur intervalle commun (rien d'extrapolé), ou sur un pas
+  propre ; signal plus lent et trous (parties cachées d'une capture) signalés « (!) ».
+- **Unité** : déduite de la formule (W, J, V/s…), ou saisie.
+- **Fenêtre** : signaux du composant à cocher (tracés), voies calculées (nom, formule,
+  unité, base de temps, couleur, affichée, état : ✓ unité, valeur d'un résultat en nombre,
+  ou ⚠ erreur), un graphique par unité sur un axe des temps commun, curseur et valeurs
+  lues, export CSV des signaux tracés.
+- Les voies calculées sont **enregistrées dans le projet** (pas dans la fiche), recalculées
+  à chaque modification des courbes.
+
 ## Exports
 
 | Export | Pour |

@@ -1131,3 +1131,42 @@ def test_dialogue_d_import_d_oscilloscope(scope_panel):
     with pytest.raises(ValueError):
         dialog.apply()
     dialog.deleteLater()
+
+
+# ---------------------------------------------------------------- calculs entre signaux
+def test_calculs_entre_signaux(ctrl, tmp_path):
+    from test_signals import component
+    ctrl.set_component(component(), None)
+    ctrl.view.actionSignals.trigger()
+    sig = ctrl.signals
+    assert sig is not None and sig.view.isVisible()
+    assert list(sig.inputs) == ["Vce", "Ic"]
+    assert [u for u, _, _ in sig.plots] == ["V", "A"]             # un graphique par unité
+    curve = sig.add_curve(formula="[Vce]*[Ic]")
+    assert curve.name == "M1" and ctrl.component.computed == [curve] and ctrl.dirty
+    assert sig.root.child("voie0").child("État").value().startswith("✓ W")
+    assert [u for u, _, _ in sig.plots] == ["V", "A", "W"]
+    # modification par l'arbre : formule scalaire, nom, unité
+    sig.set_curve(0, Formule="integ([Vce]*[Ic]; 0; 1e-5)", Nom="E")
+    assert curve.name == "E" and sig.results[0].value == pytest.approx(0.01, rel=1e-3)
+    assert sig.root.child("voie0").child("État").value() == "= 10 mJ  (!)"   # [Ic] plus lent
+    sig.add_curve(formula="[Vge]")
+    assert "inconnu" in sig.root.child("voie1").child("État").value()
+    sig.set_curve(1, Formule="deriv([Vce])", Base_de_temps="pas propre", Pas=1e-6)
+    assert len(sig.results[1].t) == 11 and sig.results[1].unit == "V/s"
+    # curseur et lectures
+    sig.set_signal_visible("Ic", False)
+    sig.set_cursor(5e-6)
+    reads = {name: value for name, value, _ in sig.readings()}
+    assert set(reads) == {"Vce", "M1"} and reads["Vce"] == pytest.approx(50, rel=1e-3)
+    assert "E = 10 mJ" in sig.view.readings.text()
+    # export, suppression, enregistrement
+    path = tmp_path / "signaux.csv"
+    assert sig.export_csv(path=str(path))
+    assert path.read_text("utf-8").splitlines()[0] == "t (s);Vce (V);M1 (V/s)"
+    sig.root.child("voie1").child("Supprimer").activate()
+    assert [c.name for c in ctrl.component.computed] == ["E"]
+    assert ctrl.write_project(tmp_path / "p.pdig.json")
+    assert ctrl.load_project(tmp_path / "p.pdig.json") is not False
+    assert [c.formula for c in ctrl.component.computed] == ["integ([Vce]*[Ic]; 0; 1e-5)"]
+    assert sig.results[0].value == pytest.approx(0.01, rel=1e-3)   # relu à l'ouverture

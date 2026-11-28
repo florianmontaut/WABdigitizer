@@ -175,7 +175,17 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     (même niveau, même allure) : laissées à l'utilisateur. `to_component` : un `Graph` par
     voie sur la même image, `channel_calibration` (orthonormée : bords de la grille en
     temps, zéro et 5 divisions en valeur) ; `looks_like_capture` (cadre orange + grille).
-    Voies REF / MATH, calculs entre signaux : à faire.
+    Voies REF / MATH : à faire.
+  - `signals.py` (branche `tektronix`, O5) : calculs entre signaux sur les courbes d'un
+    composant (temps en abscisse), moteur de formules (`SignalInterpreter` : `deriv`,
+    `integ` (cumulée ou entre t1 et t2), `mean`, `rms`, `pkpk`, `movavg` ; `t` / `time`).
+    `component_signals` : « Graphique:Courbe », « Graphique » (une seule courbe),
+    « Courbe » (nom unique). Base de temps (GLviewer `model/computed.py`) : le plus fin des
+    signaux utilisés sur leur intervalle commun, ou pas propre (`MAX_POINTS`) ; nan hors
+    intervalle ; signal plus lent et trous signalés. Unité saisie, sinon déduite
+    (`_Analyser` de formules.units ; deriv / integ ÷ / × s, unité nommée : W·s -> J).
+    `ComputedCurve` dans `Component.computed` (projet seulement, hors pile) ;
+    `evaluate_all` : une voie peut utiliser les voies du dessus par leur nom.
   - `compare.py` : comparaison entre composants de tous types. Courbes regroupées par
     dimensions physiques (X, Y) de leurs unités (`formules.units`), sinon par noms des
     grandeurs ; `Frame` : unités communes (celles de la première courbe) ; valeurs au
@@ -185,6 +195,12 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
 - `view/compare_window.py` + `controller/compare_controller.py` : fenêtre de comparaison
   non modale, enfant de la fenêtre principale, créée une fois (`MainController.open_compare`),
   composant ouvert lu par `weakref.WeakMethod`, réglages partagés (`options`).
+- `view/signals_window.py` + `controller/signals_controller.py` : fenêtre « Calculs entre
+  signaux » (Ctrl+Shift+M), non modale, créée une fois (`MainController.open_signals`),
+  contrôleur principal lu par `weakref.ref` ; interface des voies calculées de loggerFPGA
+  (ParameterTree : nom, formule, unité, base de temps, pas, couleur, affichée, état,
+  supprimer ; `set_curve` pour les tests) ; un `PlotItem` par unité, axes X liés, curseur
+  commun, valeurs lues ; relue à chaque commande de la pile et à `refresh_all` si visible.
 - `view/pdf_import_dialog.py` : import d'une datasheet PDF : identité modifiable, partie
   (module), table cochable avec caractéristique et rôle PLECS (liste par ligne, écrit
   dans `Graph.plecs_role`), aperçu et détail ; graphique en image : graduations
@@ -241,7 +257,7 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
 - `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_compare.py`, `test_zoom.py`,
   `test_library.py`, `test_pdfimport.py`, `test_datasheet.py`, `test_plotimage.py`,
   `test_curvetrace.py` (relevé, légende, lecture des mots), `test_scope.py` (capture
-  Tektronix synthétique, texte du panneau donné),
+  Tektronix synthétique, texte du panneau donné), `test_signals.py` (calculs entre signaux),
   `test_gui.py`
   (contrôleurs sans écran).
 

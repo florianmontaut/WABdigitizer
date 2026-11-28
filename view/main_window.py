@@ -137,6 +137,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actionCompare = a("Comparer des composants...", "compare",
                                "Courbes de plusieurs composants sur des axes communs",
                                "Ctrl+Shift+K")
+        self.actionSignals = a("Calculs entre signaux...", "fit",
+                               "Formules sur les courbes du composant (puissance, énergie, "
+                               "dérivée...), signaux non synchrones interpolés",
+                               "Ctrl+Shift+M")
 
         # librairie
         self.actionPublish = a("Publier dans la librairie", "publish",
@@ -213,6 +217,7 @@ class MainWindow(QtWidgets.QMainWindow):
         menu.addAction(self.actionDetachLibrary)
         menu = self.menuBar().addMenu("&Outils")
         menu.addAction(self.actionCompare)
+        menu.addAction(self.actionSignals)
         menu = self.menuBar().addMenu("&Édition")
         self.editMenu = menu
         menu.addAction(self.actionCopyTable)
