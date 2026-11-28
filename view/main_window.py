@@ -75,6 +75,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actionPaste = a("Coller une image", "paste",
                              "Ajouter un graphique depuis le presse-papiers", "Ctrl+V")
         self.actionOpen = a("Ouvrir un projet...", "open", shortcut="Ctrl+O")
+        self.actionImportScope = a("Importer une capture d'oscilloscope...", "scope",
+                                   "Capture d'écran Tektronix : voies numérisées, un graphique "
+                                   "par voie (nouveau composant)", "Ctrl+Shift+T")
         self.actionImportPdf = a("Importer une datasheet PDF...", "pdf",
                                  "Nouveau composant : graphiques, calibration et courbes "
                                  "lus dans une datasheet PDF vectorielle", "Ctrl+Shift+O")
@@ -171,7 +174,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_menus(self):
         menu = self.menuBar().addMenu("&Fichier")
-        for act in (self.actionNew, self.actionOpen, self.actionImportPdf, self.actionSave,
+        for act in (self.actionNew, self.actionOpen, self.actionImportPdf,
+                    self.actionImportScope, self.actionSave,
                     self.actionSaveAs):
             menu.addAction(act)
         menu.addSeparator()

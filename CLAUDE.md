@@ -137,6 +137,9 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     (`_templates`), mot confronté au vocabulaire (`NAMES`, « nombre unité »,
     « symbole = nombre unité », unité cohérente avec la lettre du symbole), motifs rangés
     par signature ; jusqu'à deux débris ignorés ; caractère large coupé en deux (« ff »).
+    `Vocabulary` (mots attendus, celui des datasheets par défaut) ; polices données par
+    l'appelant (`fonts_`), plusieurs modèles par caractère (le plus proche compte) ; texte
+    clair sur fond sombre : image inversée.
   - `plotimage.py` : graphique en image : `find_plot` -> `PlotArea` (cadre = traits de
     grille de même étendue, graduations = premières bandes d'encre sous le cadre et à sa
     gauche, découpées en étiquettes, prolongées à gauche sans le titre tourné ;
@@ -147,6 +150,32 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     police la plus ressemblante pour tout le graphique ; « . » et « - » par leur forme),
     puis `tick_sequence` : suite linéaire (ou en log10) des positions qui explique le plus
     de graduations (70 % et 3 au moins), extrémités mal lues prises de la suite.
+  - `scope.py` (branche `tektronix`) : capture d'écran d'oscilloscope Tektronix (MSO/MDO,
+    PNG 1024 × 736) -> `ScopeCapture` (`read_capture`), sans moteur d'OCR. Écran dans le
+    cadre orange (`screen_box`) ; grilles 10 × 10 (`find_graticules` : bord haut et ligne
+    centrale pleine largeur à 5 divisions, pointillés de confirmation ; deux grilles = zoom,
+    la plus haute est numérisée) ; voies par la teinte (`channel_masks`, `HUES`, jaune serré
+    contre l'orange du repère ▼) ; panneau (`read_panel` : traits d'encadrés effacés, mots
+    lus par labelread avec la police de l'écran `ressources/fonts/tektronix.npz`, relevée
+    par `tools/tektronix_font.py`, plusieurs modèles par caractère) ; pastilles du panneau
+    (`find_badges`) -> lignes : mesures (« C4 High 11.6a »), échelles (« 200V/div »), zoom
+    (« Z1C1 200V 10.0µs −38.0µs 62.0µs », bornes rendues cohérentes par une base de temps
+    standard `_standard`), curseurs ; zéros par les pastilles pleines du bord gauche
+    (`_zero_badges`), zéro caché sous une autre pastille départagé par la table des mesures
+    (`_hidden_zero`, sinon le niveau où le tracé passe le plus de temps) ; t = 0 au repère ▼
+    (`_trigger_x`) ou par les bornes du zoom (base de temps `TIMEBASE` cherchée dans les
+    mots collés) ; tracés (`_trace`) : par colonne, la tache verticale qui prolonge la
+    précédente (écart à toute la tache précédente ; tache lointaine acceptée seulement après
+    `STUCK` colonnes et si son morceau d'encre est long : étiquettes et repères écartés),
+    médiane + haut / bas de la bande ; étiquettes isolées retirées (`_without_text`),
+    curseurs horizontaux et verticaux retirés d'après leurs valeurs lues (`_cursor_rows`)
+    et par leur forme (`_without_vertical_cursors`), flèches du niveau de déclenchement au
+    bord droit exclues ; contrôle par la table des mesures (`_check`, 3 % de l'écran).
+    Police relevée sur 6 captures (la 7e gardée pour la validation). Courbes superposées
+    (même niveau, même allure) : laissées à l'utilisateur. `to_component` : un `Graph` par
+    voie sur la même image, `channel_calibration` (orthonormée : bords de la grille en
+    temps, zéro et 5 divisions en valeur) ; `looks_like_capture` (cadre orange + grille).
+    Voies REF / MATH, calculs entre signaux : à faire.
   - `compare.py` : comparaison entre composants de tous types. Courbes regroupées par
     dimensions physiques (X, Y) de leurs unités (`formules.units`), sinon par noms des
     grandeurs ; `Frame` : unités communes (celles de la première courbe) ; valeurs au
@@ -164,6 +193,11 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   dialogue ; sans écran : graphiques de la partie `part`, la première par défaut) :
   nouveau composant sans fichier, marqué modifié, pile vidée (comme une ouverture).
   Commande grisée sans les paquets.
+- `view/scope_import_dialog.py` : import d'une capture Tektronix (voies cochables, nom,
+  échelle, unité, base de temps modifiables ; aperçu des tracés lus). `MainController.
+  open_scope` / `import_scope(array, nom, choose)` (sans écran : toutes les voies) : nouveau
+  composant sans fichier ; `_scope_wanted` : une image ouverte, glissée ou collée reconnue
+  comme capture -> question (sans écran : `view.answer`).
 - `view/library_panel.py` (dock « Librairie » de la fenêtre principale, actions créées
   par `MainWindow`) + `controller/library_controller.py` (lecture, table filtrée et triée,
   sélection). Publier, ouvrir, comparer, supprimer : `MainController` (`publish`,
@@ -206,7 +240,8 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   `set_dirty()` ; l'étoile du titre = hors pile ou pile non propre.
 - `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_compare.py`, `test_zoom.py`,
   `test_library.py`, `test_pdfimport.py`, `test_datasheet.py`, `test_plotimage.py`,
-  `test_curvetrace.py` (relevé, légende, lecture des mots),
+  `test_curvetrace.py` (relevé, légende, lecture des mots), `test_scope.py` (capture
+  Tektronix synthétique, texte du panneau donné),
   `test_gui.py`
   (contrôleurs sans écran).
 

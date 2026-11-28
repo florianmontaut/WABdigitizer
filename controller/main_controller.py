@@ -19,7 +19,7 @@ from qtsocle import options_panel, settings, theme
 from ressources import app_settings
 
 from model import (curvetrace, document, export, extraction, fit, library, mask, pdfimport,
-                   plecs, sheet)
+                   plecs, scope, sheet)
 from model.calibration import (AxisCalibration, CalibrationError, orthogonal_points,
                                to_four_points)
 from model.library import LibraryError
@@ -92,6 +92,7 @@ class MainController(QtCore.QObject):
         view.actionPaste.triggered.connect(self.paste_image)
         view.actionOpen.triggered.connect(self.open_project)
         view.actionImportPdf.triggered.connect(self.open_pdf)
+        view.actionImportScope.triggered.connect(self.open_scope)
         if not pdfimport.available():
             view.actionImportPdf.setEnabled(False)
             view.actionImportPdf.setToolTip("Import PDF indisponible : installez pdfminer.six "
@@ -522,7 +523,77 @@ class MainController(QtCore.QObject):
             self.view.error("Image", f"Impossible de lire {path}")
             return
         self._remember_dir(path)
-        self.add_image(qimage_to_array(image), pathlib.Path(path).stem, str(path))
+        array = qimage_to_array(image)
+        if self._scope_wanted(array):
+            self.import_scope(array, pathlib.Path(path).name)
+            return
+        self.add_image(array, pathlib.Path(path).stem, str(path))
+
+    def _scope_wanted(self, array) -> bool:
+        """Capture d'oscilloscope reconnue : la numériser (question) plutôt que l'ajouter."""
+        try:
+            if not scope.looks_like_capture(array):
+                return False
+        except (ValueError, IndexError):
+            return False
+        return self.view.ask("Capture d'oscilloscope",
+                             "Capture d'écran Tektronix reconnue : numériser ses voies dans un "
+                             "nouveau composant ?\n(Non : l'ajouter comme image à relever)")
+
+    def open_scope(self, *_):
+        if not self._ask_discard():
+            return
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self.view, "Importer une capture d'oscilloscope", self._dialog_dir(),
+            "Images (*.png *.bmp *.jpg *.jpeg *.tif *.tiff)")
+        if not path:
+            return
+        image = QtGui.QImage(path)
+        if image.isNull():
+            self.view.error("Capture d'oscilloscope", f"Impossible de lire {path}")
+            return
+        self._remember_dir(path)
+        self.import_scope(qimage_to_array(image), pathlib.Path(path).name, ask=False)
+
+    def import_scope(self, array, name="capture", choose=None, ask=True) -> bool:
+        """
+        Capture d'écran Tektronix -> nouveau composant (sans fichier, à enregistrer) : un
+        graphique par voie, calibré ; voies choisies dans ScopeImportDialog (sans écran, ou
+        choose donné : ces voies, sinon toutes). Avertissements dans les notes.
+        """
+        if ask and not self._ask_discard():
+            return False
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        try:
+            capture = scope.read_capture(array)
+        except ValueError as error:
+            self.view.error("Capture d'oscilloscope", f"{name} : {error}")
+            return False
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+        labels = None
+        if choose is None and QtWidgets.QApplication.platformName() != "offscreen":
+            from view.scope_import_dialog import ScopeImportDialog
+            dialog = ScopeImportDialog(capture, array, name, self.view)
+            if not dialog.exec():
+                return False
+            choice = dialog.choice()
+            choose, labels = choice["choose"], choice["labels"]
+        if choose is not None and not choose:
+            self.view.message("Aucune voie choisie : rien n'est importé", 5000)
+            return False
+        component, warnings = scope.to_component(
+            capture, array, pathlib.Path(name).stem, name, choose, labels)
+        if not component.graphs:
+            self.view.error("Capture d'oscilloscope", f"{name} : aucune voie lue")
+            return False
+        self.set_component(component, None)
+        self.set_dirty(True)                    # nouveau projet, pas encore enregistré
+        text = f"{name} : {len(component.graphs)} voie(s) numérisée(s)"
+        if warnings:
+            text += f" ; {len(warnings)} point(s) à vérifier (notes du composant)"
+        self.view.message(text, 10000)
+        return True
 
     def paste_image(self):
         clipboard = QtWidgets.QApplication.clipboard()
@@ -534,7 +605,11 @@ class MainController(QtCore.QObject):
                 return
             self.view.message("Pas d'image dans le presse-papiers", 4000)
             return
-        self.add_image(qimage_to_array(image), None, "presse-papiers")
+        array = qimage_to_array(image)
+        if self._scope_wanted(array):
+            self.import_scope(array, "presse-papiers")
+            return
+        self.add_image(array, None, "presse-papiers")
 
     def add_image(self, array: np.ndarray, name=None, source=""):
         if not self._editable():

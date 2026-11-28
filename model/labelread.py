@@ -86,13 +86,29 @@ def fonts() -> list:
         return []
 
 
-class Reader:
-    """Lecture des mots d'une image ; police choisie une fois (la plus ressemblante)."""
+@dataclass(frozen=True)
+class Vocabulary:
+    """Mots attendus : noms fixes, unités (« nombre unité »), symboles (« symbole = … »)."""
+    names: tuple = NAMES
+    units: tuple = UNITS
+    symbols: tuple = SYMBOLS
 
-    def __init__(self, gray: np.ndarray):
+
+DATASHEET = Vocabulary()
+
+
+class Reader:
+    """
+    Lecture des mots d'une image ; police choisie une fois (la plus ressemblante).
+    Texte clair sur fond sombre (écran d'oscilloscope) : donner l'image inversée.
+    `vocabulary` : mots attendus (par défaut ceux d'une datasheet).
+    """
+
+    def __init__(self, gray: np.ndarray, vocabulary: Vocabulary = DATASHEET, fonts_=None):
         self.gray = np.asarray(gray, dtype=float)
-        self.fonts = fonts()
+        self.fonts = fonts() if fonts_ is None else fonts_
         self.font = None
+        self.vocabulary = vocabulary
 
     # ------------------------------------------------------------ caractères
     def glyphs(self, box) -> list:
@@ -163,8 +179,12 @@ class Reader:
         return out
 
     def _costs(self, glyphs, font) -> np.ndarray:
-        """Écart de chaque caractère « tall » à chaque modèle de la police (n × len(CHARS))."""
+        """
+        Écart de chaque caractère « tall » à chaque caractère de la police ; une police
+        relevée sur des captures a plusieurs modèles par caractère : le plus proche compte.
+        """
         names, inks, ratios, heights = font
+        unique, inverse = _groups(names)
         rows = []
         for g in glyphs:
             if g.shape != "tall":
@@ -173,6 +193,10 @@ class Reader:
             cost = (np.abs(inks - g.ink).mean(axis=1) + 0.3 * np.abs(ratios - g.ratio))
             if not g.sub:                  # hauteur relative : « o » / « O », « 0 »
                 cost = cost + 0.4 * np.abs(heights - g.height)
+            if len(unique) != len(names):
+                best = np.full(len(unique), np.inf)
+                np.minimum.at(best, inverse, cost)
+                cost = best
             rows.append(cost)
         return rows
 
@@ -187,7 +211,8 @@ class Reader:
         for font in candidates:
             for variant in [glyphs] + _split_variants(glyphs):
                 costs = self._costs(variant, font)
-                found = _decode(variant, costs, font[0], tuple(symbols))
+                found = _decode(variant, costs, _groups(font[0])[0], tuple(symbols),
+                                self.vocabulary)
                 if found and (best is None or (found[2], -found[1]) > (best[2], -best[1])):
                     best = (found[0], found[1], found[2], font)
                 if best is not None and best[2] and best[1] <= ACCEPT:
@@ -200,6 +225,19 @@ class Reader:
         if cost > (ACCEPT if known else FREE):
             return None
         return Word(text, cost, tuple(box), known)
+
+
+def _groups(names) -> tuple:
+    """(noms distincts, indice du nom distinct de chaque modèle)."""
+    key = tuple(names)
+    if key not in _GROUPS:
+        unique = list(dict.fromkeys(names))
+        position = {c: i for i, c in enumerate(unique)}
+        _GROUPS[key] = (unique, np.array([position[c] for c in names]))
+    return _GROUPS[key]
+
+
+_GROUPS = {}
 
 
 def _split_variants(glyphs) -> list:
@@ -219,6 +257,8 @@ def _split_variants(glyphs) -> list:
         cut = lo + int(np.argmin(profile[lo:hi]))
         parts = []
         for piece in (g.raw[:, :cut], g.raw[:, cut:]):
+            if not piece.size:                 # coupe au bord : pas de découpe
+                break
             cropped = plotimage._crop(piece)
             if cropped is None:
                 break
@@ -261,15 +301,16 @@ def _signature(pattern) -> tuple:
                  for allowed in pattern)
 
 
-@functools.lru_cache(maxsize=64)
-def _patterns(n, symbols) -> dict:
+@functools.lru_cache(maxsize=128)
+def _patterns(n, symbols, vocabulary=DATASHEET) -> dict:
     """
     Motifs de n caractères (noms, « nombre unité », « symbole = nombre unité »), rangés par
     signature : seuls ceux de même forme que le mot lu sont comparés.
     """
-    out = [_literal(name.replace(" ", "")) for name in NAMES if len(name.replace(" ", "")) == n]
-    syms = list(dict.fromkeys(list(symbols) + list(SYMBOLS)))
-    for unit in UNITS:
+    out = [_literal(name.replace(" ", "")) for name in vocabulary.names
+           if len(name.replace(" ", "")) == n]
+    syms = list(dict.fromkeys(list(symbols) + list(vocabulary.symbols)))
+    for unit in vocabulary.units:
         for prefix in [""] + [s + "=" for s in syms if _unit_fits(s, unit)]:
             k = n - len(prefix) - len(unit)
             if 1 <= k <= 7:
@@ -304,7 +345,7 @@ def _junk(glyphs) -> list:
                                 or (g.shape == "tall" and g.sub and g.ratio > 1.2)})
 
 
-def _decode(glyphs, costs, names, symbols):
+def _decode(glyphs, costs, names, symbols, vocabulary=DATASHEET):
     """
     Meilleure lecture : (texte, écart moyen, du vocabulaire) ; libre si rien ne colle.
     Jusqu'à deux signes parasites (bout de trait de rappel, d'échantillon de légende :
@@ -318,17 +359,17 @@ def _decode(glyphs, costs, names, symbols):
             continue
         keep = [i for i in range(n) if i not in drop]
         found = _decode_exact([glyphs[i] for i in keep], [costs[i] for i in keep],
-                              names, symbols)
+                              names, symbols, vocabulary)
         if found is not None and found[2]:
             score = found[1] + 0.01 * len(drop)
             if best is None or score < best[1]:
                 best = (found[0], score, True)
     if best is not None:
         return best
-    return _decode_exact(glyphs, costs, names, symbols)
+    return _decode_exact(glyphs, costs, names, symbols, vocabulary)
 
 
-def _decode_exact(glyphs, costs, names, symbols):
+def _decode_exact(glyphs, costs, names, symbols, vocabulary=DATASHEET):
     n = len(glyphs)
     if not n:
         return None
@@ -336,7 +377,7 @@ def _decode_exact(glyphs, costs, names, symbols):
     signature = tuple(None if g.shape == "tall" else g.shape for g in glyphs)
     tall = max(sum(g.shape == "tall" for g in glyphs), 1)
     best = None
-    for pattern in _patterns(n, symbols).get(signature, []):
+    for pattern in _patterns(n, symbols, vocabulary).get(signature, []):
         total, text, ok = 0.0, "", True
         for g, row, allowed in zip(glyphs, costs, pattern):
             if g.shape != "tall":

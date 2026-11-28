@@ -147,6 +147,33 @@ images. Paquets facultatifs : `pdfminer.six`, `pypdfium2` (et `matplotlib` pour 
 tests) ; sans eux, la commande est grisée. Depuis Python :
 `component, warnings = model.pdfimport.import_pdf("datasheet.pdf")`.
 
+## Importer une capture d'oscilloscope (Tektronix)
+
+Fichier › **Importer une capture d'oscilloscope...** (`Ctrl+Shift+T`) : écran sauvegardé
+par un oscilloscope Tektronix (MSO / MDO, PNG). Une capture glissée ou collée (`Ctrl+V`)
+est aussi reconnue : l'application propose de la numériser plutôt que de l'ajouter comme
+image. Sans moteur d'OCR, en une seconde environ :
+
+- **Voies** CH1 (jaune), CH2 (cyan), CH3 (magenta), CH4 (vert), reconnues à leur couleur.
+- **Réglages** lus dans le panneau : échelles verticales (« 200V/div », « 5.0a/div »),
+  base de temps ; capture **zoomée** (10 % / 90 %) : la vue complète du haut est ignorée,
+  la vue zoomée numérisée avec ses bornes (« 10.0µs −38.0µs 62.0µs »).
+- **Zéro** de chaque voie : sa pastille au bord gauche (une pastille cachée sous une autre
+  est retrouvée d'après la table des mesures, sinon le niveau le plus fréquent, à
+  vérifier) ; **t = 0** au repère de déclenchement ▼.
+- **Tracés** : la courbe médiane de chaque voie, colonne par colonne ; noms de voies écrits
+  dans la grille, curseurs, repères et flèches écartés ; parties cachées par une autre voie
+  laissées en trou (signalé).
+- **Contrôle** : les mesures affichées (High, Max, Min…) sont recalculées sur les tracés,
+  écart signalé au-delà de 3 % de l'écran.
+
+La fenêtre d'import montre les voies (à cocher ; nom, échelle et unité modifiables), la
+base de temps (modifiable) et l'aperçu des tracés lus sur la capture. Résultat : un
+**nouveau composant**, un graphique par voie sur la même image, calibré (temps en s,
+valeur dans l'unité de la voie) ; mesures de l'écran et points à vérifier dans les notes.
+Courbes superposées (même niveau, même allure) : à reprendre à la main (pinceau, Suivre la
+courbe, Séparer). Voies REF / MATH : pas encore.
+
 ## Exports
 
 | Export | Pour |

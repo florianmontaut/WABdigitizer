@@ -1068,3 +1068,66 @@ def test_apercu_et_librairie_detaches(ctrl):
     view.attach_all()
     assert not view.preview_detached and not view.library_detached
     assert view.center.indexOf(preview) == 1 and view.library_dock.widget() is view.library
+
+
+@pytest.fixture
+def scope_panel(monkeypatch):
+    """Texte du panneau de la capture synthétique (police de l'écran non reproduite)."""
+    from model import scope
+    from test_scope import PANEL
+    monkeypatch.setattr(scope, "read_panel", lambda rgb, top, reader=None: list(PANEL))
+
+
+def test_importer_une_capture_d_oscilloscope(ctrl, scope_panel, tmp_path):
+    from test_scope import capture
+    img = capture()
+    assert ctrl.import_scope(img, "essai.png")
+    c = ctrl.component
+    assert [g.name for g in c.graphs] == ["CH1", "CH2"] and c.name == "essai"
+    ch1 = c.graphs[0]
+    assert (ch1.x_axis.quantity, ch1.x_axis.unit) == ("t", "s") and ch1.y_axis.unit == "V"
+    data = ch1.datasets[0].data(ch1.calibration)
+    high = (data[:, 0] > -0.9e-4) & (data[:, 0] < 3.9e-4)
+    assert np.abs(data[high, 1] - 300).max() < 5          # créneau de 300 V
+    assert ctrl.dirty and ctrl.path is None and "Capture d'oscilloscope" in c.notes
+    # choix d'une seule voie
+    assert ctrl.import_scope(img, "essai.png", choose=["CH2"])
+    assert [g.name for g in ctrl.component.graphs] == ["CH2"]
+    # dépôt d'une capture comme image : question ; non -> image ajoutée telle quelle
+    from PIL import Image
+    path = tmp_path / "ecran.png"
+    Image.fromarray(img).save(path)
+    ctrl.view.answer = False
+    ctrl.new_component()
+    ctrl.open_files([str(path)])
+    assert "Tektronix" in ctrl.view.last_question
+    assert len(ctrl.component.graphs) == 1 and not ctrl.component.graphs[0].calibrated
+    ctrl.view.answer = True
+    ctrl.open_files([str(path)])
+    assert [g.name for g in ctrl.component.graphs] == ["CH1", "CH2"]
+
+
+def test_dialogue_d_import_d_oscilloscope(scope_panel):
+    from model import scope
+    from test_scope import capture
+    from view.scope_import_dialog import NAME, SCALE, ScopeImportDialog, parse_time
+    img = capture()
+    cap = scope.read_capture(img)
+    dialog = ScopeImportDialog(cap, img, "essai.png")
+    assert dialog.selected() == ["CH1", "CH2"] and not dialog.preview.pixmap().isNull()
+    dialog.table.item(1, 0).setCheckState(QtCore.Qt.CheckState.Unchecked)
+    dialog.table.item(0, NAME).setText("Vce")
+    dialog.table.item(0, SCALE).setText("200")
+    dialog.time_per_div.setText("50µs")
+    dialog.apply()
+    assert cap.channels[0].scale == 200 and cap.time_per_div == pytest.approx(5e-5)
+    assert dialog.choice() == {"choose": ["CH1"], "labels": {"CH1": "Vce", "CH2": "CH2"}}
+    component, _ = scope.to_component(cap, img, **dialog.choice())
+    assert [g.name for g in component.graphs] == ["Vce"]
+    data = component.graphs[0].datasets[0].data(component.graphs[0].calibration)
+    assert data[:, 1].max() == pytest.approx(600, abs=10)  # échelle doublée
+    assert parse_time("100µs") == pytest.approx(1e-4) and parse_time("2e-3") == 2e-3
+    dialog.time_per_div.setText("abc")
+    with pytest.raises(ValueError):
+        dialog.apply()
+    dialog.deleteLater()
