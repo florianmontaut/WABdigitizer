@@ -3,8 +3,10 @@
 Fenêtre « Calculs entre signaux » (non modale) :
     gauche   signaux du composant (à cocher pour les tracer), arbre des voies calculées
              (ajouter, nom, formule, unité, base de temps, affichée, état, supprimer)
-    droite   un graphique par unité (V, A, W…) sur un axe des temps commun, curseur
-             vertical, valeurs au curseur
+             échelle de l'axe choisi (automatique, min / max, graduations, grille)
+    droite   graphique à plusieurs axes d'ordonnées (view/y_axes.py : un axe par unité,
+             par voie, axe unique) ou graphiques séparés par unité, curseur vertical,
+             valeurs au curseur
 Le contrôleur (controller/signals_controller.py) remplit et redessine.
 """
 import pyqtgraph as pg
@@ -12,6 +14,8 @@ import pyqtgraph.parametertree as ptree
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from qtsocle import theme
+
+from view import y_axes
 
 
 class SignalsWindow(QtWidgets.QMainWindow):
@@ -32,13 +36,25 @@ class SignalsWindow(QtWidgets.QMainWindow):
         self.actionExport = QtGui.QAction("Exporter (CSV)...", self)
         self.actionExport.setToolTip("Signaux tracés, sur la base de temps la plus fine")
         theme.set_action_icon(self.actionExport, "export")
+        self.actionAutoScale = QtGui.QAction("Échelles automatiques", self)
+        self.actionAutoScale.setToolTip("Chaque axe de nouveau ajusté à ses courbes")
+        theme.set_action_icon(self.actionAutoScale, "fit")
         for act in (self.actionAdd, self.actionRefresh, self.actionExport):
             bar.addAction(act)
+        bar.addSeparator()
+        self.axis_mode = QtWidgets.QComboBox()
+        self.axis_mode.setToolTip("Répartition des signaux par axe d'ordonnées ; molette ou "
+                                  "glissement sur un axe : son échelle seule")
+        for key, text in y_axes.MODES.items():
+            self.axis_mode.addItem(text, key)
+        bar.addWidget(self.axis_mode)
+        bar.addAction(self.actionAutoScale)
 
         self.signals = QtWidgets.QListWidget()
         self.signals.setToolTip("Signaux du composant : cochés = tracés ; dans une formule, "
                                 "le nom entre crochets ([Vce])")
         self.tree = ptree.ParameterTree(showHeader=False)
+        self.scale_tree = ptree.ParameterTree(showHeader=False)
         left = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         box = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(box)
@@ -47,7 +63,8 @@ class SignalsWindow(QtWidgets.QMainWindow):
         lay.addWidget(self.signals)
         left.addWidget(box)
         left.addWidget(self.tree)
-        left.setSizes([220, 520])
+        left.addWidget(self.scale_tree)
+        left.setSizes([180, 420, 200])
 
         self.plots = pg.GraphicsLayoutWidget()
         self.readings = QtWidgets.QLabel()

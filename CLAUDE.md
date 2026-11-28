@@ -199,7 +199,12 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   signaux » (Ctrl+Shift+M), non modale, créée une fois (`MainController.open_signals`),
   contrôleur principal lu par `weakref.ref` ; interface des voies calculées de loggerFPGA
   (ParameterTree : nom, formule, unité, base de temps, pas, couleur, affichée, état,
-  supprimer ; `set_curve` pour les tests) ; un `PlotItem` par unité, axes X liés, curseur
+  supprimer ; `set_curve` pour les tests) ; axes d'ordonnées multiples (`view/y_axes.py`,
+  repris de loggerFPGA `controller/y_axes.py` sans l'alignement des zéros : `AxisScale` =
+  ViewBox sous la principale + axe dans une colonne réservée, relation affine avec l'axe
+  principal ; modes unit / channel / single / split) ; arbre « Échelle » de l'axe choisi
+  (auto, min, max, graduations, grille ; `self.scales` par clé d'axe, session seulement ;
+  `set_scale` pour les tests) ; Y libre borné en dézoom (`zoom.limit_y_free`) ; curseur
   commun, valeurs lues ; relue à chaque commande de la pile et à `refresh_all` si visible.
 - `view/pdf_import_dialog.py` : import d'une datasheet PDF : identité modifiable, partie
   (module), table cochable avec caractéristique et rôle PLECS (liste par ligne, écrit

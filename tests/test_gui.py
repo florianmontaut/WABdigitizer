@@ -1141,11 +1141,11 @@ def test_calculs_entre_signaux(ctrl, tmp_path):
     sig = ctrl.signals
     assert sig is not None and sig.view.isVisible()
     assert list(sig.inputs) == ["Vce", "Ic"]
-    assert [u for u, _, _ in sig.plots] == ["V", "A"]             # un graphique par unité
+    assert [a["key"] for a in sig.axes] == ["unité:V", "unité:A"]  # un axe par unité
     curve = sig.add_curve(formula="[Vce]*[Ic]")
     assert curve.name == "M1" and ctrl.component.computed == [curve] and ctrl.dirty
     assert sig.root.child("voie0").child("État").value().startswith("✓ W")
-    assert [u for u, _, _ in sig.plots] == ["V", "A", "W"]
+    assert [a["key"] for a in sig.axes] == ["unité:V", "unité:A", "unité:W"]
     # modification par l'arbre : formule scalaire, nom, unité
     sig.set_curve(0, Formule="integ([Vce]*[Ic]; 0; 1e-5)", Nom="E")
     assert curve.name == "E" and sig.results[0].value == pytest.approx(0.01, rel=1e-3)
@@ -1170,3 +1170,50 @@ def test_calculs_entre_signaux(ctrl, tmp_path):
     assert ctrl.load_project(tmp_path / "p.pdig.json") is not False
     assert [c.formula for c in ctrl.component.computed] == ["integ([Vce]*[Ic]; 0; 1e-5)"]
     assert sig.results[0].value == pytest.approx(0.01, rel=1e-3)   # relu à l'ouverture
+
+
+def test_calculs_axes_multiples_et_echelle(ctrl):
+    from test_signals import component
+    from view import y_axes
+    assert y_axes.groups([1, 2, 3], lambda k: "V" if k < 3 else "A", "unit") == [[1, 2], [3]]
+    assert y_axes.groups([1, 2, 3], str, "channel") == [[1], [2], [3]]
+    assert y_axes.columns(3) == [("left", 3), ("left", 2), ("right", 6)]
+    ctrl.set_component(component(), None)
+    ctrl.open_signals()
+    sig = ctrl.signals
+    sig.add_curve(formula="[Vce]/10", name="Vg")                 # 0 à 10 V
+    # un axe par unité : un seul graphique, deux axes
+    assert [a["key"] for a in sig.axes] == ["unité:V", "unité:A"]
+    assert len({id(a["plot"]) for a in sig.axes}) == 1 and len(sig.extra_scales) == 1
+    # un axe par voie : Vg sur son propre axe, échelle ajustée à 0..10 V
+    sig.set_axis_mode("channel")
+    assert sig.view.axis_mode.currentData() == "channel"
+    assert [a["label"] for a in sig.axes] == ["Vce (V)", "Ic (A)", "Vg (V)"]
+    lo, hi = sig.axes[2]["vb"].viewRange()[1]
+    assert lo == pytest.approx(-0.3) and hi == pytest.approx(10.3)
+    # échelle saisie : axe choisi par son signal, min / max, graduations, grille
+    sig.select_axis_of("Vg")
+    assert sig.scale_root.child("Axe").value() == "Vg (V)"
+    sig.set_scale(Min=-20.0, Max=20.0, Graduation=5.0, Sous_graduations=5, Grille=False)
+    axis = sig.axes[2]
+    assert axis["vb"].viewRange()[1] == pytest.approx([-20, 20])
+    assert sig.settings(axis["key"])["auto"] is False
+    assert axis["axis"]._tickSpacing == [(5.0, 0), (1.0, 0)] and axis["axis"].grid is False
+    # déplacement du graphique : les autres axes suivent (relation affine)
+    main = sig.axes[0]["vb"]
+    y0, y1 = main.viewRange()[1]
+    main.setYRange(y0 + (y1 - y0) / 2, y1 + (y1 - y0) / 2, padding=0)
+    assert axis["vb"].viewRange()[1] == pytest.approx([0, 40])
+    assert sig.scale_root.child("Min").value() == pytest.approx(0)
+    # réglages gardés au nouveau tracé ; Échelles automatiques : de nouveau ajustées
+    sig.refresh_plots()
+    assert sig.axes[2]["vb"].viewRange()[1] == pytest.approx([0, 40])
+    sig.view.actionAutoScale.trigger()
+    assert sig.axes[2]["vb"].viewRange()[1] == pytest.approx([-0.3, 10.3])
+    # axe unique, graphiques séparés
+    sig.set_axis_mode("single")
+    assert len(sig.axes) == 1 and not sig.extra_scales
+    sig.set_axis_mode("split")
+    assert len({id(a["plot"]) for a in sig.axes}) == 2 and len(sig.lines) == 2
+    sig.set_cursor(5e-6)
+    assert all(line.value() == pytest.approx(5e-6) for line in sig.lines)

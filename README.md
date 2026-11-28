@@ -198,8 +198,16 @@ Signaux entre crochets : `[Vce]` (graphique d'une seule courbe, ou courbe de nom
 - **Unité** : déduite de la formule (W, J, V/s…), ou saisie.
 - **Fenêtre** : signaux du composant à cocher (tracés), voies calculées (nom, formule,
   unité, base de temps, couleur, affichée, état : ✓ unité, valeur d'un résultat en nombre,
-  ou ⚠ erreur), un graphique par unité sur un axe des temps commun, curseur et valeurs
-  lues, export CSV des signaux tracés.
+  ou ⚠ erreur), curseur et valeurs lues, export CSV des signaux tracés.
+- **Axes** (liste de la barre d'outils) : un axe par unité (par défaut), un axe par voie
+  (axe à la couleur de sa voie : une voie de 10 V lisible à côté de voies de 1000 V), axe
+  unique, ou graphiques séparés par unité. Molette dans le graphique : zoom en temps ;
+  déplacement : toutes les courbes ensemble ; molette ou glissement **sur un axe** : son
+  échelle seule.
+- **Échelle** (arbre sous les voies calculées) : axe choisi (cliquer un signal le choisit
+  aussi), automatique, min / max, pas des graduations et sous-graduations (0 :
+  automatique), grille (premier axe seulement par défaut). Réglages gardés pendant la
+  session ; « Échelles automatiques » ajuste de nouveau tous les axes.
 - Les voies calculées sont **enregistrées dans le projet** (pas dans la fiche), recalculées
   à chaque modification des courbes.
 

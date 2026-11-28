@@ -76,6 +76,18 @@ def limit_plot(plot: pg.PlotItem, xs, ys, log_x=False, log_y=False,
             limit_axis(vb, axis, *b, margin=margin)
 
 
+def limit_y_free(vb: pg.ViewBox, lo: float, hi: float, factor: float = 20.0):
+    """
+    Graphique à plusieurs échelles (repris de loggerFPGA) : seul le dézoom vertical est
+    borné (`factor` fois l'étendue des données) ; la position reste libre (une voie peut
+    être décalée par rapport aux autres, comme sur un oscilloscope).
+    """
+    width = _span(lo, hi)
+    reach = factor * width
+    vb.setLimits(yMin=lo - reach, yMax=hi + reach, maxYRange=2 * reach,
+                 minYRange=width * MIN_FRACTION)
+
+
 def limit_empty(plot: pg.PlotItem):
     """Graphique sans courbe : bornes par défaut."""
     limit_plot(plot, [], [])
