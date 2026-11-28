@@ -41,6 +41,24 @@ python -m pytest tests
    - une courbe relevée en plusieurs morceaux : les sélectionner dans l'arborescence
      (`Ctrl+clic`), puis **Fusionner les courbes** (menu contextuel, `Ctrl+Shift+J`) :
      morceaux reliés bout à bout en une seule courbe (une seule étape d'annulation).
+   - **retoucher une partie des points** : `Ctrl` + glisser sur l'image (tous les modes
+     sauf la calibration) sélectionne les points de la courbe active dans le rectangle
+     (`Ctrl+Maj` : ajout ; `Ctrl+clic` sur un point : l'ajoute ou le retire, dans le vide :
+     vide la sélection ; `Échap` en navigation aussi). Les lignes de la table se
+     sélectionnent aussi (`Maj` / `Ctrl+clic`). Menu **Points** (aussi au clic droit sur
+     l'image, dès qu'une courbe ou des points sont choisis ; glisser au bouton droit reste
+     le zoom) :
+     - **Supprimer** (`Suppr` sur l'image ou la table) ;
+     - **Décimer** (`Ctrl+Shift+D`) : 1 point sur n, Douglas-Peucker (tolérance en
+       pixels) ou espacement minimal ; les bouts de chaque morceau sélectionné restent ;
+     - **Lisser / filtrer** (`Ctrl+Shift+F`) : moyenne glissante, Savitzky-Golay (garde
+       mieux les coudes) ou médiane (retire les points aberrants), sur Y seulement, en
+       coordonnées calibrées (log sur un axe log) ; les voisins hors sélection servent de
+       contexte, le morceau se raccorde sans marche.
+
+     Aperçu en direct sur l'image (croix vertes) ; sans sélection, toute la courbe.
+     Chaque action est une seule étape d'annulation (qui rend la sélection). Le modèle
+     ajusté n'est pas recalculé.
 4. **Condition** de la courbe (« Tj = 125 °C ») et unités des axes dans le panneau de droite.
 5. **Modèle** (`Ctrl+M`) : formule de x (`a*x^b`, `v0 + r*x + k*x^b`...) ajustée sur les
    points ; courbe du modèle en pointillés sur l'image pour vérification.
@@ -52,7 +70,8 @@ Clavier (cliquer d'abord dans l'image) :
 | Touche | Effet |
 |---|---|
 | Flèches | calibration : dernier repère placé, ou repère cliqué ; ajout : point sélectionné. Un pixel de l'écran par appui (Maj ×10, Ctrl ×0,1) : plus on zoome, plus le déplacement est fin |
-| Suppr | supprime le point sélectionné |
+| Suppr | supprime les points sélectionnés par zone (tous les modes), sinon le point sélectionné (mode ajout) |
+| Ctrl + glisser | sélectionne les points dans le rectangle (Ctrl+Maj : ajout) |
 | Tab / Maj+Tab | point suivant / précédent |
 | Ctrl+Z / Ctrl+Y | annuler / refaire : points (ajout, déplacement, suppression, extraction, table), calibration, coups de pinceau, courbes et graphiques |
 

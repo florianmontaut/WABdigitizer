@@ -19,7 +19,7 @@ from qtsocle import options_panel, settings, theme
 from ressources import app_settings
 
 from model import (curvetrace, document, export, extraction, fit, library, mask, pdfimport,
-                   plecs, scope, sheet)
+                   plecs, pointops, scope, sheet)
 from model.calibration import (AxisCalibration, CalibrationError, orthogonal_points,
                                to_four_points)
 from model.library import LibraryError
@@ -36,6 +36,7 @@ from view.signals_window import SignalsWindow
 from view.dialogs import CalibrationDialog, format_value, parse_value
 from view.main_window import IMAGE_SUFFIXES, qimage_to_array
 from view.pdf_import_dialog import PdfImportDialog
+from view.points_dialog import PointsDialog
 
 ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
 CLICK_TOLERANCE = 7          # pixels de l'écran
@@ -66,6 +67,11 @@ class MainController(QtCore.QObject):
         self.drag_text = ""
         self.drag_selected = None
         self.selected_point = None       # indice du point sélectionné de la courbe
+        self.point_selection = ()        # indices sélectionnés par zone ou dans la table
+        self._point_dialog = None        # dialogue Décimer / Lisser ouvert (aperçu)
+        # réglages des outils Décimer / Lisser (session)
+        self.point_tools = {"decimate": {"method": "every", "every": 2, "distance": 2.0},
+                            "filter": {"method": "mean", "window": 5, "order": 2}}
         self.calibration_marker = None   # repère sélectionné (indice dans markers())
         self.calibration_drag = None     # repères pendant le glisser d'un repère
         self.last_paint = None
@@ -128,6 +134,15 @@ class MainController(QtCore.QObject):
         view.actionSplit.triggered.connect(self.split_points)
         view.actionMerge.triggered.connect(self.merge_curves)
         view.actionDelete.triggered.connect(self.delete_selection)
+        view.actionDeletePoints.triggered.connect(self.delete_points)
+        view.actionDeleteRows.triggered.connect(self.delete_points)
+        view.actionDecimate.triggered.connect(self.open_decimate)
+        view.actionFilter.triggered.connect(self.open_filter)
+        view.actionSelectAll.triggered.connect(self.select_all_points)
+        view.actionClearPoints.triggered.connect(self.clear_point_selection)
+        view.canvas.area_selected.connect(self.select_area)
+        view.canvas.context_menu.connect(self.canvas_context_menu)
+        view.table.itemSelectionChanged.connect(self.table_selection_changed)
         view.actionOptions.triggered.connect(self.edit_options)
         view.actionDark.toggled.connect(self.set_dark_mode)
         view.closing.connect(self.save_settings)
@@ -198,7 +213,8 @@ class MainController(QtCore.QObject):
                        view.actionOpenImage, view.actionPaste, view.actionClearMask,
                        view.actionDetection, view.actionExtract, view.actionFit,
                        view.actionAddCurve, view.actionSplit, view.actionDelete,
-                       view.actionExportPlecs):
+                       view.actionExportPlecs, view.actionDeletePoints, view.actionDeleteRows,
+                       view.actionDecimate, view.actionFilter):
             action.setEnabled(editable)
         self._update_merge()
         view.parameters.setEnabled(editable)
@@ -232,6 +248,7 @@ class MainController(QtCore.QObject):
         self.dataset_index = dataset_index
         self.calibration_clicks = []
         self.selected_point = None
+        self.point_selection = ()
         self.calibration_marker = None
         self.refresh_all(reset_view=True)
 
@@ -244,6 +261,7 @@ class MainController(QtCore.QObject):
         if changed:
             self.calibration_clicks = []
             self.selected_point = None
+            self.point_selection = ()
             self.calibration_marker = None
         if graph is not None and dataset is not None:
             self.dataset_index = next((i for i, d in enumerate(graph.datasets) if d is dataset),
@@ -251,8 +269,12 @@ class MainController(QtCore.QObject):
         return changed
 
     def show_points(self, graph, dataset, selected):
+        """selected : indice du point sélectionné, ou tuple d'indices (sélection par zone)."""
         changed = self._focus(graph, dataset)
-        self.selected_point = selected
+        if isinstance(selected, tuple):
+            self.point_selection, self.selected_point = selected, None
+        else:
+            self.point_selection, self.selected_point = (), selected
         if changed:
             self.refresh_all(reset_view=True)
         else:
@@ -283,6 +305,7 @@ class MainController(QtCore.QObject):
                 self.dataset_index = 0 if self.graph and self.graph.datasets else None
             self.calibration_clicks = []
             self.selected_point = None
+            self.point_selection = ()
             self.refresh_all(reset_view=True)
             return
         changed = self._focus(graph)
@@ -292,6 +315,7 @@ class MainController(QtCore.QObject):
             self.dataset_index = (min(self.dataset_index or 0, len(graph.datasets) - 1)
                                   if graph.datasets else None)
         self.selected_point = None
+        self.point_selection = ()
         self.refresh_all(reset_view=changed)
 
     # ============================================================ thème et réglages
@@ -529,6 +553,7 @@ class MainController(QtCore.QObject):
         self.graph_index = 0 if component.graphs else None
         self.dataset_index = 0 if component.graphs and component.graphs[0].datasets else None
         self.selected_point = None
+        self.point_selection = ()
         self.calibration_marker = None
         self.calibration_clicks = []
         self.undo_stack.clear()
@@ -972,6 +997,7 @@ class MainController(QtCore.QObject):
         else:
             self.dataset_index = d
             self.selected_point = None
+            self.point_selection = ()
             self.refresh_all()
 
     def tree_item_changed(self, item):
@@ -1014,6 +1040,8 @@ class MainController(QtCore.QObject):
 
     # ============================================================ modes
     def mode_triggered(self, action):
+        if action.data() == Mode.NAVIGATE and self.view.canvas.mode == Mode.NAVIGATE:
+            self.clear_point_selection()           # Échap en navigation
         self.set_mode(action.data())
 
     def set_mode(self, mode: Mode):
@@ -1068,7 +1096,8 @@ class MainController(QtCore.QObject):
             return (f"Calibration — cliquez {labels[min(n, len(labels) - 1)]} ; flèches : ajuster "
                     "(Maj ×10, Ctrl ×0,1) ; molette : zoom")
         return {
-            Mode.NAVIGATE: "Navigation — glisser : déplacer, molette : zoom",
+            Mode.NAVIGATE: ("Navigation — glisser : déplacer, molette : zoom ; Ctrl + glisser : "
+                            "sélectionner des points (Maj : ajouter), Échap : désélectionner"),
             Mode.ADD: ("Clic : ajouter un point ; glisser : déplacer ; flèches : ajuster "
                        "(Maj ×10, Ctrl ×0,1) ; Suppr ; Tab : point suivant"),
             Mode.DELETE: "Clic sur un point : le supprimer",
@@ -1109,6 +1138,7 @@ class MainController(QtCore.QObject):
         elif mode == Mode.ADD:
             if self.dataset is None:
                 self.add_dataset()
+            self.point_selection = ()
             dataset = self.dataset
             self.drag_before = points_state(dataset)
             self.drag_selected = self.selected_point
@@ -1232,7 +1262,7 @@ class MainController(QtCore.QObject):
             self.refresh_dataset_views()
             return
         self.push(PointsCommand(self, graph, dataset, before, after, text,
-                                self.selected_point, selected_after))
+                                self.point_selection or self.selected_point, selected_after))
 
     def delete_point(self, index):
         remaining = len(self.dataset) - 1
@@ -1272,9 +1302,10 @@ class MainController(QtCore.QObject):
         if dataset is None or not len(dataset):
             return
         if command == "delete":
-            if not self._editable():
-                return
-            if self.selected_point is not None and self.selected_point < len(dataset):
+            if self.point_selection:
+                self.delete_points()
+            elif (self.view.canvas.mode == Mode.ADD and self._editable()
+                  and self.selected_point is not None and self.selected_point < len(dataset)):
                 self.delete_point(self.selected_point)
             return
         step = 1 if command == "next" else -1
@@ -1290,6 +1321,211 @@ class MainController(QtCore.QObject):
         self.selected_point = row
         self.refresh_selection(select_row=False)
 
+    # ============================================================ sélection par zone
+    def set_point_selection(self, indices):
+        """Points sélectionnés (indices de la courbe active), anneaux et lignes de la table."""
+        self.point_selection = tuple(sorted(int(i) for i in set(indices)))
+        self.selected_point = None
+        self.refresh_selection()
+        count = len(self.point_selection)
+        if count:
+            self.view.message(f"{count} point{'s' if count > 1 else ''} sélectionné"
+                              f"{'s' if count > 1 else ''} (Suppr, Ctrl+Maj+D : décimer, "
+                              "Ctrl+Maj+F : lisser)", 5000)
+
+    def canvas_context_menu(self, pos) -> bool:
+        """Clic droit sur l'image : menu Points si une courbe ou des points sont choisis."""
+        if self.dataset is None and not self.point_selection:
+            return False
+        self.view.pointsMenu.popup(pos)
+        return True
+
+    def clear_point_selection(self, *_):
+        if self.point_selection:
+            self.point_selection = ()
+            self.refresh_selection()
+
+    def select_all_points(self, *_):
+        if self.dataset is not None:
+            self.set_point_selection(range(len(self.dataset)))
+
+    def select_area(self, x0, y0, x1, y1, add=False):
+        """
+        Rectangle Ctrl + glisser (pixels de l'image) : points de la courbe active dedans ;
+        add (Maj) : ajoutés à la sélection. Rectangle de la taille d'un clic : le point
+        cliqué entre ou sort de la sélection, un clic dans le vide la vide.
+        """
+        dataset = self.dataset
+        if dataset is None or not dataset.visible or not len(dataset):
+            if not add:
+                self.clear_point_selection()
+            return
+        current = set(self.point_selection)
+        tolerance = self._tolerance()
+        if abs(x1 - x0) <= tolerance and abs(y1 - y0) <= tolerance:
+            index = dataset.nearest(x1, y1, tolerance)
+            if index is None:
+                chosen = current if add else set()
+            else:
+                chosen = current ^ {index}
+        else:
+            px = dataset.pixels
+            inside = np.flatnonzero((px[:, 0] >= min(x0, x1)) & (px[:, 0] <= max(x0, x1))
+                                    & (px[:, 1] >= min(y0, y1)) & (px[:, 1] <= max(y0, y1)))
+            chosen = current | set(inside.tolist()) if add else set(inside.tolist())
+        self.set_point_selection(chosen)
+
+    def table_selection_changed(self):
+        """Lignes choisies dans la table (Maj / Ctrl + clic) : sélection des points."""
+        if self._loading or self.dataset is None:
+            return
+        rows = sorted({index.row() for index in self.view.table.selectionModel().selectedRows()})
+        if len(rows) > 1:
+            self.point_selection = tuple(rows)
+            self.selected_point = None
+        elif self.point_selection:
+            self.point_selection = ()
+            self.selected_point = rows[0] if rows else None
+        else:
+            return
+        self.refresh_selection(select_row=False)
+
+    def _targets(self):
+        """(indices traités, toute la courbe ?) : la sélection, sinon toute la courbe."""
+        if self.point_selection:
+            return list(self.point_selection), False
+        return list(range(len(self.dataset))), True
+
+    def delete_points(self, *_):
+        """Supprimer les points sélectionnés (ou le point sélectionné de la table)."""
+        dataset = self.dataset
+        if dataset is None or not self._editable():
+            return
+        indices = list(self.point_selection)
+        if not indices:
+            if self.selected_point is not None and self.selected_point < len(dataset):
+                self.delete_point(self.selected_point)
+            return
+        count = len(indices)
+        self.change_points(f"Supprimer {count} point{'s' if count > 1 else ''}",
+                           lambda d: setattr(d, "pixels", np.delete(d.pixels, indices, axis=0)))
+
+    def _decimated(self, values):
+        """(masque des points gardés, indices traités, toute la courbe ?)."""
+        indices, whole = self._targets()
+        value = values.get("every", 2) if values["method"] == "every" else values.get("distance", 2.0)
+        return pointops.decimate(self.dataset.pixels, indices, values["method"], value), indices, whole
+
+    def _smoothed(self, values):
+        """(points lissés en pixels, indices traités, toute la courbe ?)."""
+        indices, whole = self._targets()
+        graph, pixels = self.graph, self.dataset.pixels
+        calibration = graph.calibration if graph.calibrated else None
+        scaled = calibration.pixel_to_scaled(pixels) if calibration else pixels
+        out = pointops.smooth(scaled, indices, values["method"], values.get("window", 5),
+                              values.get("order", 2))
+        return (calibration.scaled_to_pixel(out) if calibration else out), indices, whole
+
+    def _point_tool_ready(self) -> bool:
+        dataset = self.dataset
+        if dataset is None or not self._editable():
+            return False
+        if len(dataset) < 3 or (self.point_selection and len(self.point_selection) < 3):
+            self.view.message("Il faut au moins 3 points (sélection par Ctrl + glisser sur "
+                              "l'image, sinon toute la courbe)", 5000)
+            return False
+        return True
+
+    def decimate_points(self, method="every", every=2, distance=2.0) -> bool:
+        """Décimer la sélection (toute la courbe sans sélection) ; False si rien ne change."""
+        if not self._point_tool_ready():
+            return False
+        keep, indices, whole = self._decimated({"method": method, "every": every,
+                                                "distance": distance})
+        if keep.all():
+            self.view.message("Décimation : aucun point à retirer", 4000)
+            return False
+        new_index = np.cumsum(keep) - 1
+        after = None if whole else tuple(int(new_index[i]) for i in indices if keep[i])
+        removed = int((~keep).sum())
+        self.change_points(f"Décimer ({removed} point{'s' if removed > 1 else ''} retiré"
+                           f"{'s' if removed > 1 else ''})",
+                           lambda d: setattr(d, "pixels", d.pixels[keep]), after)
+        return True
+
+    def filter_points(self, method="mean", window=5, order=2) -> bool:
+        """Lisser les Y de la sélection (toute la courbe sans sélection)."""
+        if not self._point_tool_ready():
+            return False
+        try:
+            pixels, indices, whole = self._smoothed({"method": method, "window": window,
+                                                     "order": order})
+        except ValueError as error:
+            self.view.message(f"Lissage impossible : {error}", 6000)
+            return False
+        after = None if whole else tuple(indices)
+        self.change_points(f"Lisser {len(indices)} points ({pointops.FILTERS[method]})",
+                           lambda d: setattr(d, "pixels", pixels), after)
+        return True
+
+    def open_decimate(self, *_):
+        return self._open_point_tool("decimate")
+
+    def open_filter(self, *_):
+        return self._open_point_tool("filter")
+
+    def _open_point_tool(self, kind) -> bool:
+        """Dialogue avec aperçu sur l'image ; appliqué (une commande de la pile) si accepté."""
+        if not self._point_tool_ready():
+            return False
+        if QtWidgets.QApplication.platformName() == "offscreen":
+            return False            # sans écran : les tests appellent decimate / filter_points
+        dialog = PointsDialog(kind, self.point_tools[kind], self.view)
+        self._point_dialog = dialog
+        dialog.changed.connect(self._point_preview)
+        accepted = dialog.exec()
+        values = dialog.values()
+        self.point_tools[kind] = values
+        self._point_dialog = None
+        self.view.canvas.set_preview(None)
+        if not accepted:
+            return False
+        if kind == "decimate":
+            return self.decimate_points(**values)
+        return self.filter_points(**values)
+
+    @staticmethod
+    def _by_runs(pixels, indices, keep=None):
+        """
+        Points des morceaux sélectionnés (gardés seulement si keep), séparés par une ligne
+        nan : tracé sans raccord entre morceaux.
+        """
+        parts = []
+        for a, b in pointops.runs(indices):
+            part = pixels[a:b + 1] if keep is None else pixels[a:b + 1][keep[a:b + 1]]
+            parts += [part, np.full((1, 2), np.nan)]
+        return np.vstack(parts) if parts else np.empty((0, 2))
+
+    def _point_preview(self, values):
+        dialog = getattr(self, "_point_dialog", None)
+        if dialog is None or self.dataset is None:
+            return
+        try:
+            if dialog.kind == "decimate":
+                keep, indices, _whole = self._decimated(values)
+                kept = int(keep[indices].sum())
+                dialog.set_info(f"{len(indices)} points -> {kept} "
+                                f"({len(indices) - kept} retirés)")
+                shown = self._by_runs(self.dataset.pixels, indices, keep)
+            else:
+                pixels, indices, _whole = self._smoothed(values)
+                shown = self._by_runs(pixels, indices)
+                dialog.set_info(f"{len(indices)} points lissés")
+        except ValueError as error:
+            dialog.set_info(str(error))
+            shown = None
+        self.view.canvas.set_preview(shown)
+
     def refresh_selection(self, select_row=True):
         """Anneau sur le repère ou le point sélectionné, ligne de la table."""
         canvas, graph, dataset = self.view.canvas, self.graph, self.dataset
@@ -1299,6 +1535,9 @@ class MainController(QtCore.QObject):
                 point = self.click_markers()[-1]
             elif self.calibration_marker is not None and graph.calibrated:
                 point = self.calibration_points()[self.calibration_marker]
+        elif dataset is not None and self.point_selection:
+            self.point_selection = tuple(i for i in self.point_selection if i < len(dataset))
+            point = dataset.pixels[list(self.point_selection)] if self.point_selection else None
         elif dataset is not None and self.selected_point is not None:
             if self.selected_point < len(dataset):
                 point = dataset.pixels[self.selected_point]
@@ -1306,13 +1545,25 @@ class MainController(QtCore.QObject):
                 self.selected_point = None
         canvas.set_selection(point)
         if select_row:
-            table = self.view.table
-            self._loading = True
-            if self.selected_point is not None and self.selected_point < table.rowCount():
-                table.selectRow(self.selected_point)
-            else:
-                table.clearSelection()
-            self._loading = False
+            self._select_rows()
+
+    def _select_rows(self):
+        """Lignes de la table : la sélection par zone, sinon le point sélectionné."""
+        table = self.view.table
+        rows = self.point_selection or (() if self.selected_point is None
+                                        else (self.selected_point,))
+        rows = [r for r in rows if r < table.rowCount()]
+        model, flag = table.model(), QtCore.QItemSelectionModel.SelectionFlag
+        selection = QtCore.QItemSelection()
+        for a, b in pointops.runs(rows):
+            selection.select(model.index(a, 0), model.index(b, model.columnCount() - 1))
+        self._loading = True
+        if rows:
+            current = self.selected_point if self.selected_point in rows else rows[0]
+            table.selectionModel().setCurrentIndex(model.index(current, 0), flag.NoUpdate)
+            table.scrollTo(model.index(current, 0))
+        table.selectionModel().select(selection, flag.ClearAndSelect | flag.Rows)
+        self._loading = False
 
     def calibration_points(self) -> list:
         """Repères de la calibration du graphique : (O, X2, Y2) ou les 4."""

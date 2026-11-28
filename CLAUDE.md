@@ -186,6 +186,12 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
     (`_Analyser` de formules.units ; deriv / integ ÷ / × s, unité nommée : W·s -> J).
     `ComputedCurve` dans `Component.computed` (projet seulement, hors pile) ;
     `evaluate_all` : une voie peut utiliser les voies du dessus par leur nom.
+  - `pointops.py` : décimer / lisser une partie des points d'une courbe (indices
+    sélectionnés, traités par morceaux contigus `runs`). `decimate` -> masque des points
+    gardés (1 sur n, Douglas-Peucker perpendiculaire `extraction.simplify_mask`,
+    espacement minimal ; en pixels, bouts de chaque morceau gardés) ; `smooth` : Y seuls,
+    coordonnées calibrées données par l'appelant, filtre (moyenne, Savitzky-Golay,
+    médiane ; fenêtre impaire) calculé sur toute la courbe puis recopié sur la sélection.
   - `compare.py` : comparaison entre composants de tous types. Courbes regroupées par
     dimensions physiques (X, Y) de leurs unités (`formules.units`), sinon par noms des
     grandeurs ; `Frame` : unités communes (celles de la première courbe) ; valeurs au
@@ -250,6 +256,17 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   `rebuild_tree` : met à jour sur place quand la structure est la même (pas de saut) ;
   ne remet la sélection que si l'élément courant n'est pas le bon (sinon Ctrl+clic, où
   Qt change l'élément courant avant d'inverser sa sélection, serait défait).
+  Sélection par zone : `ImageCanvas.area_selected` (Ctrl + glisser, filtre de la scène,
+  tous les modes sauf calibration ; Maj : ajout) -> `select_area` ; `point_selection`
+  (tuple d'indices, vidé à chaque changement de courbe / de points) ; table en lignes
+  multiples (`table_selection_changed`, `_select_rows` par `QItemSelection` : `selectRow`
+  lirait Ctrl / Maj enfoncés). `PointsCommand` : sélection avant / après = indice ou tuple.
+  `delete_points`, `decimate_points`, `filter_points` (pour les tests),
+  `_open_point_tool` (`view/points_dialog.py`, aperçu `canvas.set_preview`, réglages
+  `point_tools` de la session ; pas de dialogue sans écran). Clic droit sur l'image
+  (`GraphicsScene.sigMouseClicked` : clic sans glisser, le glisser droit reste au zoom) ->
+  `ImageCanvas.context_menu` -> `canvas_context_menu` : `MainWindow.pointsMenu` (le menu
+  de la barre) si une courbe ou des points sont choisis.
   `follow_curve` (mode `Mode.FOLLOW`, touche F) : remplace les points de la courbe choisie,
   ou les complète bout à bout (Maj, `extraction.chain`) ; couleur de la courbe retenue.
 - `controller/commands.py` : annuler / refaire (`QUndoStack` du contrôleur, mécanisme de
@@ -261,7 +278,7 @@ MaskPainter.py, extracteurs) : algorithmes conservés, repères d'image simplifi
   `set_dirty()` ; l'étoile du titre = hors pile ou pile non propre.
 - `tests/` : `test_model.py` (calculs), `test_plecs.py`, `test_compare.py`, `test_zoom.py`,
   `test_library.py`, `test_pdfimport.py`, `test_datasheet.py`, `test_plotimage.py`,
-  `test_curvetrace.py` (relevé, légende, lecture des mots), `test_scope.py` (capture
+  `test_curvetrace.py` (relevé, légende, lecture des mots), `test_pointops.py`, `test_scope.py` (capture
   Tektronix synthétique, texte du panneau donné), `test_signals.py` (calculs entre signaux),
   `test_gui.py`
   (contrôleurs sans écran).

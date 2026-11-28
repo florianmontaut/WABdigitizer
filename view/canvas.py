@@ -10,6 +10,9 @@ s'affiche tel quel, sans retournement ni transposition.
 Le canevas ne décide de rien : hors du mode navigation, les clics gauches sont convertis
 en pixels de l'image et émis (pressed, moved, released) ; le contrôleur les interprète.
 La molette et le bouton droit restent au zoom de pyqtgraph dans tous les modes.
+Ctrl + glisser (tous les modes sauf la calibration) : rectangle de sélection des points,
+émis au relâchement (area_selected, Maj : ajout à la sélection).
+Clic droit sans glisser (le glisser reste au zoom) : context_menu, position à l'écran.
 """
 import enum
 
@@ -59,12 +62,16 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
     released = QtCore.pyqtSignal(float, float)
     nudged = QtCore.pyqtSignal(float, float)            # flèches : déplacement en pixels
     key_command = QtCore.pyqtSignal(str)                # "delete", "next", "previous"
+    # rectangle Ctrl + glisser : x0, y0, x1, y1 (pixels de l'image), Maj (ajout)
+    area_selected = QtCore.pyqtSignal(float, float, float, float, bool)
+    context_menu = QtCore.pyqtSignal(QtCore.QPoint)     # clic droit : position à l'écran
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.mode = Mode.NAVIGATE
         self._left_down = False
         self._shape = None
+        self._area_start = None          # début du rectangle de sélection (pixels)
         self.brush_radius = 8.0
 
         self.view_box = self.addViewBox(lockAspect=True, invertY=True)
@@ -108,9 +115,27 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
         self.selection_item.setZValue(40)
         self.view_box.addItem(self.selection_item, ignoreBounds=True)
 
+        # aperçu d'une décimation / d'un lissage : points résultants
+        self.preview_item = pg.PlotDataItem(
+            pen=pg.mkPen("#2E7D32", width=1.5, style=QtCore.Qt.PenStyle.DashLine),
+            symbol="x", symbolSize=8, symbolPen=pg.mkPen("#2E7D32", width=1.5))
+        self.preview_item.setZValue(45)
+        self.view_box.addItem(self.preview_item, ignoreBounds=True)
+
+        # rectangle de sélection (Ctrl + glisser)
+        self.area_item = QtWidgets.QGraphicsRectItem()
+        pen = pg.mkPen("#FF8800", width=1, style=QtCore.Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+        self.area_item.setPen(pen)
+        self.area_item.setBrush(pg.mkBrush(255, 136, 0, 30))
+        self.area_item.setZValue(60)
+        self.area_item.setVisible(False)
+        self.view_box.addItem(self.area_item, ignoreBounds=True)
+
         # les flèches et Tab arrivent ici une fois le canevas cliqué
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self.scene().installEventFilter(self)
+        self.scene().sigMouseClicked.connect(self._clicked)
         self.set_mode(Mode.NAVIGATE)
 
     # ============================================================ image et calques
@@ -218,11 +243,26 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
             self.dataset_items.append((points, model))
 
     def set_selection(self, point):
-        """Anneau autour du point (x, y) sélectionné, None pour l'effacer."""
+        """
+        Anneau autour du point (x, y) sélectionné, ou de chaque point d'un tableau (N, 2)
+        (sélection par zone, anneaux plus petits) ; None pour l'effacer.
+        """
         if point is None:
             self.selection_item.clear()
+            return
+        points = np.asarray(point, dtype=float).reshape(-1, 2)
+        if not len(points):
+            self.selection_item.clear()
         else:
-            self.selection_item.setData(pos=[tuple(point)])
+            self.selection_item.setData(pos=points, size=17 if len(points) == 1 else 13)
+
+    def set_preview(self, pixels):
+        """Points d'aperçu (N, 2), None pour l'effacer."""
+        if pixels is None or not len(pixels):
+            self.preview_item.setData([], [])
+        else:
+            pixels = np.asarray(pixels, dtype=float).reshape(-1, 2)
+            self.preview_item.setData(pixels[:, 0], pixels[:, 1], connect="finite")
 
     # ============================================================ clavier
     # pas des flèches, en pixels de l'image : normal, Maj, Ctrl
@@ -243,8 +283,17 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
         return screen * self.pixel_size()
 
     def handle_key(self, key, modifiers) -> bool:
-        """Touche traitée (True) ou laissée à Qt. Seulement en calibration et en ajout."""
-        if self.mode not in (Mode.CALIBRATE, Mode.ADD) or self._shape is None:
+        """
+        Touche traitée (True) ou laissée à Qt. Suppr : dans tous les modes sauf la
+        calibration (points sélectionnés par zone) ; le reste en calibration et en ajout.
+        """
+        if self._shape is None:
+            return False
+        if (key in (QtCore.Qt.Key.Key_Delete, QtCore.Qt.Key.Key_Backspace)
+                and self.mode != Mode.CALIBRATE):
+            self.key_command.emit("delete")
+            return True
+        if self.mode not in (Mode.CALIBRATE, Mode.ADD):
             return False
         if key in self.ARROWS:
             dx, dy = self.ARROWS[key]
@@ -252,9 +301,6 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
             self.nudged.emit(dx * step, dy * step)
             return True
         if self.mode == Mode.ADD:
-            if key in (QtCore.Qt.Key.Key_Delete, QtCore.Qt.Key.Key_Backspace):
-                self.key_command.emit("delete")
-                return True
             if key == QtCore.Qt.Key.Key_Backtab or (
                     key == QtCore.Qt.Key.Key_Tab
                     and modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier):
@@ -283,6 +329,7 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
     # ============================================================ modes et souris
     def set_mode(self, mode: Mode):
         self.mode = mode
+        self.cancel_area()
         self.setCursor(CURSORS[mode])
         self.brush_cursor.setVisible(False)
 
@@ -309,12 +356,69 @@ class ImageCanvas(pg.GraphicsLayoutWidget):
                                               width=1.5, cosmetic=True))
             self.brush_cursor.setVisible(True)
 
+    def _area_event(self, event, kind) -> bool:
+        """
+        Rectangle de sélection : début, suivi, fin (émis au relâchement). Seuls les
+        événements de souris de la scène sont pris ; les autres (entrée, touches...) suivent
+        leur cours. Bouton relâché hors de la vue (relâchement perdu) : rectangle abandonné.
+        """
+        Type = QtCore.QEvent.Type
+        if kind not in (Type.GraphicsSceneMousePress, Type.GraphicsSceneMouseMove,
+                        Type.GraphicsSceneMouseRelease):
+            return False
+        if (kind == Type.GraphicsSceneMouseMove and self._area_start is not None
+                and not event.buttons() & QtCore.Qt.MouseButton.LeftButton):
+            self.cancel_area()
+            return False
+        x, y = self._image_pos(event.scenePos())
+        if kind == Type.GraphicsSceneMousePress:
+            self._area_start = (x, y)
+            self.area_item.setRect(QtCore.QRectF(x, y, 0, 0))
+            self.area_item.setVisible(True)
+            self.setFocus(QtCore.Qt.FocusReason.MouseFocusReason)
+        elif kind == Type.GraphicsSceneMouseMove:
+            x0, y0 = self._area_start
+            self.area_item.setRect(QtCore.QRectF(QtCore.QPointF(x0, y0),
+                                                 QtCore.QPointF(x, y)).normalized())
+        elif kind == Type.GraphicsSceneMouseRelease:
+            if event.button() != QtCore.Qt.MouseButton.LeftButton:
+                return True
+            x0, y0 = self._area_start
+            self._area_start = None
+            self.area_item.setVisible(False)
+            add = bool(event.modifiers() & QtCore.Qt.KeyboardModifier.ShiftModifier)
+            self.area_selected.emit(x0, y0, x, y, add)
+        else:
+            return False
+        event.accept()
+        return True
+
+    def _clicked(self, event):
+        """Clic de pyqtgraph (pas un glisser) : clic droit dans l'image -> menu contextuel."""
+        if (event.button() == QtCore.Qt.MouseButton.RightButton
+                and self._inside(event.scenePos())):
+            event.accept()
+            self.context_menu.emit(event.screenPos().toPoint())
+
+    def cancel_area(self):
+        """Rectangle en cours abandonné, sans sélection."""
+        self._area_start = None
+        self.area_item.setVisible(False)
+
     def eventFilter(self, obj, event):
-        if self.mode == Mode.NAVIGATE or self._shape is None:
+        if self._shape is None:
             return False
         kind = event.type()
         Type = QtCore.QEvent.Type
         left = QtCore.Qt.MouseButton.LeftButton
+        if self._area_start is not None:
+            return self._area_event(event, kind)
+        if (kind == Type.GraphicsSceneMousePress and event.button() == left
+                and event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier
+                and self.mode != Mode.CALIBRATE and self._inside(event.scenePos())):
+            return self._area_event(event, kind)
+        if self.mode == Mode.NAVIGATE:
+            return False
         if kind == Type.GraphicsSceneMousePress:
             if event.button() != left or not self._inside(event.scenePos()):
                 return False

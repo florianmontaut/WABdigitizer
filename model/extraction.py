@@ -230,6 +230,14 @@ def simplify(points: np.ndarray, tolerance: float, mode: str = "vertical") -> np
     points = np.asarray(points, dtype=float)
     if len(points) <= 2 or tolerance <= 0:
         return points
+    return points[simplify_mask(points, tolerance, mode)]
+
+
+def simplify_mask(points: np.ndarray, tolerance: float, mode: str = "vertical") -> np.ndarray:
+    """Points gardés par simplify (masque booléen) ; les deux bouts toujours."""
+    points = np.asarray(points, dtype=float)
+    if len(points) <= 2 or tolerance <= 0:
+        return np.ones(len(points), dtype=bool)
     keep = np.zeros(len(points), dtype=bool)
     keep[[0, -1]] = True
     stack = [(0, len(points) - 1)]
@@ -252,7 +260,7 @@ def simplify(points: np.ndarray, tolerance: float, mode: str = "vertical") -> np
             index = a + 1 + worst
             keep[index] = True
             stack += [(a, index), (index, b)]
-    return points[keep]
+    return keep
 
 
 # ================================================================ point d'entrée

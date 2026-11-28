@@ -1217,3 +1217,118 @@ def test_calculs_axes_multiples_et_echelle(ctrl):
     assert len({id(a["plot"]) for a in sig.axes}) == 2 and len(sig.lines) == 2
     sig.set_cursor(5e-6)
     assert all(line.value() == pytest.approx(5e-6) for line in sig.lines)
+
+
+# ---------------------------------------------------------------- sélection par zone
+def drag_area(ctrl, start, end, modifiers=QtCore.Qt.KeyboardModifier.ControlModifier):
+    """Ctrl + glisser à la souris sur le canevas, de start à end (pixels de l'image)."""
+    from PyQt6 import QtTest
+    canvas = ctrl.view.canvas
+
+    def pos(point):
+        scene = canvas.view_box.mapViewToScene(QtCore.QPointF(*point))
+        return canvas.mapFromScene(scene)
+
+    left = QtCore.Qt.MouseButton.LeftButton
+    QtTest.QTest.mousePress(canvas.viewport(), left, modifiers, pos(start))
+    # autres événements de la scène pendant le glisser (entrée, touche) : ignorés
+    scene = canvas.scene()
+    QtWidgets.QApplication.sendEvent(scene, QtCore.QEvent(QtCore.QEvent.Type.Enter))
+    QtTest.QTest.keyClick(canvas, QtCore.Qt.Key.Key_Alt)
+    QtTest.QTest.mouseMove(canvas.viewport(), pos(end))
+    QtTest.QTest.mouseRelease(canvas.viewport(), left, modifiers, pos(end))
+
+
+def test_selection_par_zone_et_suppression(ctrl):
+    calibrated(ctrl)
+    for x in range(150, 451, 25):                          # 13 points sur y = 300
+        click(ctrl, x, 300)
+    dataset, stack = ctrl.dataset, ctrl.undo_stack
+    canvas = ctrl.view.canvas
+    canvas.resize(800, 600)
+    canvas.show()
+    canvas.view_box.setRange(xRange=(0, 600), yRange=(0, 500), padding=0)
+    QtWidgets.QApplication.processEvents()
+    ctrl.set_mode(Mode.NAVIGATE)
+    drag_area(ctrl, (190, 250), (290, 350))                # vraie souris, en navigation
+    assert ctrl.point_selection == (2, 3, 4, 5)
+    assert len(canvas.selection_item.data) == 4 and not canvas.area_item.isVisible()
+    rows = sorted({i.row() for i in ctrl.view.table.selectionModel().selectedRows()})
+    assert rows == [2, 3, 4, 5]
+    ctrl.select_area(390, 250, 410, 350, add=True)         # Maj : ajout
+    assert ctrl.point_selection == (2, 3, 4, 5, 10)
+    ctrl.select_area(400, 300, 400, 300)                   # Ctrl + clic sur un point : bascule
+    assert ctrl.point_selection == (2, 3, 4, 5)
+    # clic droit sur l'image : menu Points en menu contextuel
+    from PyQt6 import QtTest
+    menu = ctrl.view.pointsMenu
+    target = canvas.mapFromScene(canvas.view_box.mapViewToScene(QtCore.QPointF(300, 200)))
+    QtTest.QTest.mouseClick(canvas.viewport(), QtCore.Qt.MouseButton.RightButton,
+                            QtCore.Qt.KeyboardModifier.NoModifier, target)
+    assert menu.isVisible() and ctrl.view.actionDecimate in menu.actions()
+    menu.hide()
+    assert ctrl.point_selection == (2, 3, 4, 5)            # sélection gardée
+    key(ctrl, QtCore.Qt.Key.Key_Delete)                    # Suppr en navigation
+    assert len(dataset) == 9 and ctrl.point_selection == ()
+    assert stack.undoText() == "Supprimer 4 points"
+    stack.undo()                                           # la sélection revient
+    assert len(dataset) == 13 and ctrl.point_selection == (2, 3, 4, 5)
+    ctrl.select_area(10, 10, 10, 10)                       # clic dans le vide : vidée
+    assert ctrl.point_selection == () and canvas.selection_item.data.size == 0
+    # depuis la table : Maj + clic de lignes
+    table = ctrl.view.table
+    flag = QtCore.QItemSelectionModel.SelectionFlag
+    table.selectionModel().select(QtCore.QItemSelection(
+        table.model().index(0, 0), table.model().index(2, 1)), flag.ClearAndSelect | flag.Rows)
+    assert ctrl.point_selection == (0, 1, 2)
+    ctrl.view.actionDeleteRows.trigger()
+    assert len(dataset) == 10
+    ctrl.view.actionClearPoints.trigger()
+    assert ctrl.point_selection == ()
+
+
+def test_decimer_et_lisser_la_selection(ctrl):
+    graph = calibrated(ctrl)
+    rng = np.random.default_rng(3)
+    xs = np.linspace(140, 460, 33)
+    for x, dy in zip(xs, rng.normal(0, 3, len(xs))):
+        click(ctrl, x, 300 + dy)
+    dataset, stack = ctrl.dataset, ctrl.undo_stack
+    assert len(dataset) == 33
+    ctrl.select_area(200, 0, 400, 500)                     # 21 points (x 200 … 400)
+    selected = ctrl.point_selection
+    assert len(selected) == 21
+    assert ctrl.decimate_points("every", every=4)
+    assert len(dataset) == 33 - 15                         # 6 gardés sur 21, bouts compris
+    assert len(ctrl.point_selection) == 6
+    assert stack.undoText() == "Décimer (15 points retirés)"
+    stack.undo()
+    assert len(dataset) == 33 and ctrl.point_selection == selected
+    before = dataset.pixels.copy()
+    assert ctrl.filter_points("mean", window=7)
+    inside = list(selected)
+    outside = [i for i in range(33) if i not in selected]
+    assert np.array_equal(dataset.pixels[outside], before[outside])
+    assert np.allclose(dataset.pixels[:, 0], before[:, 0])          # Y seulement
+    assert dataset.pixels[inside, 1].std() < before[inside, 1].std()
+    stack.undo()
+    assert np.array_equal(dataset.pixels, before)
+    # sans sélection : toute la courbe ; aperçu du dialogue sans l'ouvrir
+    ctrl.clear_point_selection()
+    from view.points_dialog import PointsDialog
+    dialog = PointsDialog("decimate", ctrl.point_tools["decimate"], ctrl.view)
+    ctrl._point_dialog = dialog
+    ctrl._point_preview({"method": "every", "every": 2, "distance": 2.0})
+    assert dialog.info.text() == "33 points -> 17 (16 retirés)"
+    assert len(ctrl.view.canvas.preview_item.xData) == 18          # 17 points + séparateur
+    ctrl._point_dialog = None
+    dialog.deleteLater()
+    assert not ctrl.open_decimate()                        # sans écran : pas de dialogue
+    assert ctrl.decimate_points("tolerance", distance=50.0)
+    assert len(dataset) < 33 and graph.calibrated
+
+
+def test_pas_de_menu_contextuel_sans_courbe(ctrl):
+    assert ctrl.dataset is None                            # composant neuf : rien à traiter
+    assert not ctrl.canvas_context_menu(QtCore.QPoint(10, 10))
+    assert not ctrl.view.pointsMenu.isVisible()

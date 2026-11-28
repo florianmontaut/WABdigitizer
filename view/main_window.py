@@ -126,6 +126,21 @@ class MainWindow(QtWidgets.QMainWindow):
                              "Ctrl+Shift+J")
         self.actionDelete = a("Supprimer la sélection", "trash",
                               "Supprimer le graphique ou la courbe sélectionné")
+        # points sélectionnés par zone (Ctrl + glisser sur l'image, ou lignes de la table)
+        self.actionDeletePoints = a("Supprimer les points sélectionnés", "point_remove",
+                                    "Points sélectionnés par zone (Ctrl + glisser) ou dans "
+                                    "la table (Suppr sur l'image ou la table)")
+        self.actionDecimate = a("Décimer les points...", "simplify",
+                                "Moins de points dans la sélection (toute la courbe sans "
+                                "sélection) : 1 sur n, tolérance, espacement", "Ctrl+Shift+D")
+        self.actionFilter = a("Lisser / filtrer les points...", "smooth",
+                              "Moyenne glissante, Savitzky-Golay ou médiane sur la sélection "
+                              "(toute la courbe sans sélection)", "Ctrl+Shift+F")
+        self.actionSelectAll = a("Sélectionner tous les points", None,
+                                 "Tous les points de la courbe active")
+        self.actionClearPoints = a("Désélectionner les points", None,
+                                   "Vider la sélection (aussi : Échap en navigation, "
+                                   "Ctrl + clic dans le vide)")
         self.actionDetachPreview = a("Détacher l'aperçu", "detach",
                                      "Aperçu en unités physiques dans sa propre fenêtre "
                                      "(la fermer le remet sous l'image)")
@@ -200,6 +215,14 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.actionFit, self.actionAddCurve, self.actionSplit, self.actionMerge,
                     self.actionDelete):
             menu.addAction(act)
+        menu = self.menuBar().addMenu("&Points")
+        self.pointsMenu = menu               # aussi menu contextuel du canevas (clic droit)
+        for act in (self.actionDeletePoints, self.actionDecimate, self.actionFilter, None,
+                    self.actionSelectAll, self.actionClearPoints):
+            if act is None:
+                menu.addSeparator()
+            else:
+                menu.addAction(act)
         menu = self.menuBar().addMenu("&Librairie")
         self.actionLibraryPanel = self.library_dock.toggleViewAction()
         self.actionLibraryPanel.setText("Panneau de la librairie")
@@ -264,6 +287,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table.setHorizontalHeaderLabels(["X", "Y"])
         self.table.horizontalHeader().setSectionResizeMode(
             QtWidgets.QHeaderView.ResizeMode.Stretch)
+        # lignes entières, plusieurs à la fois (Maj / Ctrl + clic) : sélection des points
+        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        # Suppr dans la table (pas pendant l'édition d'une cellule : l'éditeur a le focus)
+        self.actionDeleteRows = QtGui.QAction("Supprimer les points sélectionnés", self.table)
+        self.actionDeleteRows.setShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_Delete))
+        self.actionDeleteRows.setShortcutContext(QtCore.Qt.ShortcutContext.WidgetShortcut)
+        self.table.addAction(self.actionDeleteRows)
         right = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         right.addWidget(self.parameters)
         right.addWidget(self.table)
